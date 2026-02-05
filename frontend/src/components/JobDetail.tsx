@@ -14,15 +14,32 @@ interface JobWithDetails extends Job {
   reminders: Reminder[];
 }
 
+interface GeneratedDoc {
+  type: string;
+  label: string;
+  icon: string;
+  filename: string;
+}
+
 export default function JobDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [job, setJob] = useState<JobWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [h1bChecking, setH1bChecking] = useState(false);
+  const [documents, setDocuments] = useState<Record<string, string>>({});
+  const [activeDoc, setActiveDoc] = useState<string | null>(null);
+
+  const docTypes: GeneratedDoc[] = [
+    { type: 'resume', label: 'Tailored Resume', icon: '📄', filename: `job_${id}_resume.md` },
+    { type: 'cover_letter', label: 'Cover Letter', icon: '✉️', filename: `job_${id}_cover_letter.md` },
+    { type: 'linkedin', label: 'LinkedIn Message', icon: '💼', filename: `job_${id}_linkedin.md` },
+    { type: 'interview', label: 'Interview Prep', icon: '🎯', filename: `job_${id}_interview.md` },
+  ];
 
   useEffect(() => {
     loadJob();
+    loadDocuments();
   }, [id]);
 
   async function loadJob() {
@@ -34,6 +51,23 @@ export default function JobDetail() {
       console.error('Error loading job:', error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDocuments() {
+    // Try to load each document type
+    for (const doc of docTypes) {
+      try {
+        const res = await fetch(`/api/documents/${id}/${doc.type}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.content) {
+            setDocuments(prev => ({ ...prev, [doc.type]: data.content }));
+          }
+        }
+      } catch (error) {
+        // Document doesn't exist yet, that's ok
+      }
     }
   }
 
@@ -88,6 +122,11 @@ export default function JobDetail() {
     } catch (error) {
       console.error('Error deleting job:', error);
     }
+  }
+
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text);
+    alert('Copied to clipboard!');
   }
 
   if (loading) {
@@ -180,6 +219,65 @@ export default function JobDetail() {
         </div>
       </div>
 
+      {/* Generated Documents */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-lg font-semibold mb-4">Generated Materials</h2>
+
+        {/* Document Tabs */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          {docTypes.map(doc => {
+            const hasDoc = documents[doc.type];
+            return (
+              <button
+                key={doc.type}
+                onClick={() => setActiveDoc(activeDoc === doc.type ? null : doc.type)}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                  activeDoc === doc.type
+                    ? 'bg-blue-600 text-white'
+                    : hasDoc
+                    ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                    : 'bg-gray-100 text-gray-400'
+                }`}
+                disabled={!hasDoc}
+              >
+                <span>{doc.icon}</span>
+                <span>{doc.label}</span>
+                {hasDoc && <span className="text-xs">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Document Content */}
+        {activeDoc && documents[activeDoc] && (
+          <div className="border rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-gray-50 border-b">
+              <span className="font-medium">
+                {docTypes.find(d => d.type === activeDoc)?.label}
+              </span>
+              <button
+                onClick={() => copyToClipboard(documents[activeDoc])}
+                className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Copy to Clipboard
+              </button>
+            </div>
+            <div className="p-4 max-h-96 overflow-y-auto">
+              <pre className="whitespace-pre-wrap text-sm font-mono">{documents[activeDoc]}</pre>
+            </div>
+          </div>
+        )}
+
+        {Object.keys(documents).length === 0 && (
+          <div className="text-center py-8 text-gray-500">
+            <p>No documents generated yet.</p>
+            <p className="text-sm mt-2">
+              Go to <Link to="/sync" className="text-blue-600 hover:underline">Sync Jobs</Link> to generate materials.
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Description */}
       {job.description && (
         <div className="bg-white rounded-lg shadow p-6">
@@ -239,58 +337,9 @@ export default function JobDetail() {
         )}
       </div>
 
-      {/* AI Actions */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-lg font-semibold mb-4">AI Actions</h2>
-        <p className="text-sm text-gray-600 mb-4">
-          Use Claude Code to generate tailored content for this job.
-        </p>
-        <div className="space-y-3">
-          <AIAction
-            label="Tailor Resume"
-            command={`claude "Read the job description for ${job.title} at ${job.company_name} and tailor my resume from data/resumes/resume_ai.md. Focus on matching keywords and relevant experience. Output to ai-workspace/output/resume_${job.id}.md"`}
-          />
-          <AIAction
-            label="Generate Cover Letter"
-            command={`claude "Write a cover letter for ${job.title} at ${job.company_name}. Use my profile from data/profile.md. Keep it 250-350 words, professional but personable. Output to ai-workspace/output/cover_${job.id}.md"`}
-          />
-          <AIAction
-            label="LinkedIn Message"
-            command={`claude "Write a LinkedIn outreach message to request a referral for ${job.title} at ${job.company_name}. Keep it human, curious, 150-200 words. Output to ai-workspace/output/linkedin_${job.id}.md"`}
-          />
-        </div>
-      </div>
-
       <Link to="/jobs" className="inline-block text-blue-600 hover:underline">
         ← Back to Jobs
       </Link>
-    </div>
-  );
-}
-
-function AIAction({ label, command }: { label: string; command: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function copyCommand() {
-    navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  return (
-    <div className="border rounded p-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-medium">{label}</span>
-        <button
-          onClick={copyCommand}
-          className="text-sm px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-        >
-          {copied ? 'Copied!' : 'Copy Command'}
-        </button>
-      </div>
-      <code className="text-xs text-gray-600 block bg-gray-50 p-2 rounded overflow-x-auto">
-        {command}
-      </code>
     </div>
   );
 }

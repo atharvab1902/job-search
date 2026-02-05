@@ -4,14 +4,15 @@ import JobList from './components/JobList';
 import JobDetail from './components/JobDetail';
 import AddJob from './components/AddJob';
 import Reminders from './components/Reminders';
+import SyncJobs from './components/SyncJobs';
 
 function App() {
   const location = useLocation();
 
   const navItems = [
     { path: '/', label: 'Dashboard' },
+    { path: '/sync', label: 'Sync Jobs' },
     { path: '/jobs', label: 'Jobs' },
-    { path: '/jobs/add', label: 'Add Job' },
     { path: '/reminders', label: 'Reminders' },
   ];
 
@@ -45,6 +46,7 @@ function App() {
       <main className="max-w-7xl mx-auto px-4 py-6">
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/sync" element={<SyncJobs />} />
           <Route path="/jobs" element={<JobList />} />
           <Route path="/jobs/add" element={<AddJob />} />
           <Route path="/jobs/:id" element={<JobDetail />} />

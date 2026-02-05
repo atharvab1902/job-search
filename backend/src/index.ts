@@ -6,6 +6,8 @@ import companiesRouter from './routes/companies';
 import remindersRouter from './routes/reminders';
 import h1bRouter from './routes/h1b';
 import statsRouter from './routes/stats';
+import syncRouter from './routes/sync';
+import documentsRouter from './routes/documents';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -20,6 +22,8 @@ app.use('/api/companies', companiesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/h1b', h1bRouter);
 app.use('/api/stats', statsRouter);
+app.use('/api/sync', syncRouter);
+app.use('/api/documents', documentsRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
