@@ -9,6 +9,7 @@ interface SyncStatus {
     documentsGenerated: number;
     error?: string;
   } | null;
+  log: string[];
 }
 
 export default function SyncJobs() {
@@ -107,6 +108,14 @@ export default function SyncJobs() {
           <p className="mt-2 text-sm text-blue-600">
             Claude Code is scanning your emails and generating documents for each job.
           </p>
+          {/* Live Log */}
+          {status.log && status.log.length > 0 && (
+            <div className="mt-3 bg-gray-900 text-green-400 rounded p-3 max-h-64 overflow-y-auto font-mono text-xs">
+              {status.log.map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

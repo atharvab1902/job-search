@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { runJobSync, generateDocumentsForJob } from '../services/claudeRunner';
+import { runJobSync, generateDocumentsForJob, syncLog } from '../services/claudeRunner';
 import db from '../db/database';
 
 const router = Router();
@@ -46,7 +46,8 @@ router.get('/status', (req, res) => {
   res.json({
     inProgress: syncInProgress,
     lastSync: lastSyncTime,
-    lastResult: lastSyncResult
+    lastResult: lastSyncResult,
+    log: syncInProgress ? syncLog : []
   });
 });
 
