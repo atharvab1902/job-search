@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__gmail__search_emails",
+      "mcp__gmail__read_email",
+      "Bash(dir:*)",
+      "WebSearch",
+      "Bash(npm install)",
+      "Bash(timeout 10 npm run dev:*)"
+    ]
+  }
+}

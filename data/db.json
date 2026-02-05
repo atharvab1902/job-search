@@ -1,0 +1,16 @@
+{
+  "companies": [],
+  "jobs": [],
+  "applications": [],
+  "reminders": [],
+  "h1b_data": [],
+  "email_log": [],
+  "counters": {
+    "companies": 0,
+    "jobs": 0,
+    "applications": 0,
+    "reminders": 0,
+    "h1b_data": 0,
+    "email_log": 0
+  }
+}
