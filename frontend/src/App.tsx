@@ -5,6 +5,7 @@ import JobDetail from './components/JobDetail';
 import AddJob from './components/AddJob';
 import Reminders from './components/Reminders';
 import SyncJobs from './components/SyncJobs';
+import Settings from './components/Settings';
 
 function App() {
   const location = useLocation();
@@ -14,6 +15,7 @@ function App() {
     { path: '/sync', label: 'Sync Jobs' },
     { path: '/jobs', label: 'Jobs' },
     { path: '/reminders', label: 'Reminders' },
+    { path: '/settings', label: 'Settings' },
   ];
 
   return (
@@ -51,6 +53,7 @@ function App() {
           <Route path="/jobs/add" element={<AddJob />} />
           <Route path="/jobs/:id" element={<JobDetail />} />
           <Route path="/reminders" element={<Reminders />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
     </div>

@@ -1,7 +1,36 @@
+# Dependencies
 node_modules/
 dist/
+
+# Environment & Config
 .env
 *.db
 *.sqlite
+data/config.json
+
+# Personal Data (DO NOT PUSH!)
+data/db.json
+data/db.backup.json
+data/db.corrupted.json
+data/profile.md
+data/resumes/resume_ai.md
+data/resumes/resume_general.md
+
+# Generated Documents (Personal Applications!)
+ai-workspace/output/
+
+# Build Artifacts
+*.exe
+*.pdf
+*.docx
+*.tex
+resume_content.txt
+backend/generate_replica.js
+
+# Claude Code Local Settings
+.claude/settings.local.json
+.claude/memory/
+
+# OS Files
 .DS_Store
 Thumbs.db

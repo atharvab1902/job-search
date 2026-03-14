@@ -104,8 +104,14 @@ export default function JobList() {
             <span>H1B Sponsors Only</span>
           </label>
 
-          <div className="ml-auto text-sm text-gray-600">
-            {total} jobs found
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-sm text-gray-600">{total} jobs found</span>
+            <Link
+              to="/jobs/add"
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-semibold"
+            >
+              + Add Job
+            </Link>
           </div>
         </div>
       </div>

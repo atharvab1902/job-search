@@ -8,6 +8,7 @@ import h1bRouter from './routes/h1b';
 import statsRouter from './routes/stats';
 import syncRouter from './routes/sync';
 import documentsRouter from './routes/documents';
+import settingsRouter from './routes/settings';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -24,6 +25,7 @@ app.use('/api/h1b', h1bRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/documents', documentsRouter);
+app.use('/api/settings', settingsRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {

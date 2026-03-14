@@ -174,13 +174,14 @@ router.patch('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const { status, priority, notes, fit_score } = req.body;
+    const { status, priority, notes, fit_score, description } = req.body;
     const job = db.data!.jobs[jobIndex];
 
     if (status !== undefined) job.status = status;
     if (priority !== undefined) job.priority = priority;
     if (notes !== undefined) job.notes = notes;
     if (fit_score !== undefined) job.fit_score = fit_score;
+    if (description !== undefined) job.description = description;
     job.updated_at = now();
 
     await db.write();
