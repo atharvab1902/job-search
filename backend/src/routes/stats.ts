@@ -1,30 +1,33 @@
 import { Router } from 'express';
-import db from '../db/database';
+import prisma from '../lib/prisma';
+import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', async (req, res) => {
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
   try {
-    await db.read();
+    const userId = req.userId!;
 
-    // Count by status
+    const [jobs, reminders] = await Promise.all([
+      prisma.job.findMany({ where: { user_id: userId }, select: { status: true, source: true, created_at: true, company_id: true, h1b_sponsor: true } }),
+      prisma.reminder.findMany({ where: { user_id: userId }, select: { completed: true, due_date: true } })
+    ]);
+
+    // By status
     const byStatus: Record<string, number> = {};
-    for (const job of db.data!.jobs) {
+    for (const job of jobs) {
       byStatus[job.status] = (byStatus[job.status] || 0) + 1;
     }
 
-    // Count by source
+    // By source
     const bySource: Record<string, number> = {};
-    for (const job of db.data!.jobs) {
+    for (const job of jobs) {
       const source = job.source || 'unknown';
       bySource[source] = (bySource[source] || 0) + 1;
     }
 
     // H1B sponsors
-    const h1bCompanyIds = new Set(
-      db.data!.companies.filter(c => c.h1b_sponsor === 1).map(c => c.id)
-    );
-    const h1bSponsors = db.data!.jobs.filter(j => j.company_id && h1bCompanyIds.has(j.company_id)).length;
+    const h1bSponsors = jobs.filter(j => j.h1b_sponsor === 1).length;
 
     // Reminders
     const today = new Date();
@@ -32,18 +35,13 @@ router.get('/', async (req, res) => {
     const weekFromNow = new Date(today);
     weekFromNow.setDate(weekFromNow.getDate() + 7);
 
-    const upcomingReminders = db.data!.reminders.filter(r =>
-      r.completed === 0 && new Date(r.due_date) <= weekFromNow
-    ).length;
-
-    const overdueReminders = db.data!.reminders.filter(r =>
-      r.completed === 0 && new Date(r.due_date) < today
-    ).length;
+    const upcomingReminders = reminders.filter(r => !r.completed && new Date(r.due_date) <= weekFromNow).length;
+    const overdueReminders = reminders.filter(r => !r.completed && new Date(r.due_date) < today).length;
 
     // Recent jobs (last 7 days)
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
-    const recentJobs = db.data!.jobs.filter(j => new Date(j.created_at) >= weekAgo).length;
+    const recentJobs = jobs.filter(j => new Date(j.created_at) >= weekAgo).length;
 
     // Funnel
     const applied = byStatus['applied'] || 0;
@@ -53,22 +51,13 @@ router.get('/', async (req, res) => {
     const responseRate = applied > 0 ? Math.round(((interviewing + offers) / applied) * 100) : 0;
 
     res.json({
-      total: db.data!.jobs.length,
+      total: jobs.length,
       h1bSponsors,
       byStatus,
       bySource,
-      reminders: {
-        upcoming: upcomingReminders,
-        overdue: overdueReminders
-      },
+      reminders: { upcoming: upcomingReminders, overdue: overdueReminders },
       recentJobs,
-      funnel: {
-        applied,
-        interviewing,
-        offers,
-        rejected,
-        responseRate
-      }
+      funnel: { applied, interviewing, offers, rejected, responseRate }
     });
   } catch (error) {
     console.error('Error fetching stats:', error);

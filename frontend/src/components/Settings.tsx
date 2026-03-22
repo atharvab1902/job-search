@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { apiFetch } from '../lib/api';
 
 interface ProviderInfo {
   id: string;
@@ -25,7 +26,7 @@ export default function Settings() {
 
   async function loadSettings() {
     try {
-      const res = await fetch('/api/settings');
+      const res = await apiFetch('/api/settings');
       const data = await res.json();
       setSettings(data);
     } catch (error) {
@@ -41,15 +42,14 @@ export default function Settings() {
     setMessage(null);
 
     try {
-      const res = await fetch('/api/settings', {
+      const res = await apiFetch('/api/settings', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, model })
       });
 
       if (res.ok) {
         const data = await res.json();
-        setSettings(prev => prev ? { ...prev, provider: data.config.provider, model: data.config.model } : null);
+        setSettings(prev => prev ? { ...prev, provider: data.provider, model: data.model } : null);
         setMessage({ type: 'success', text: 'Settings saved!' });
       } else {
         throw new Error('Failed to save');

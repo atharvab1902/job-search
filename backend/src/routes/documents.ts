@@ -4,343 +4,255 @@ import fs from 'fs';
 import { generateDocument, syncLog } from '../services/claudeRunner';
 import { generateResumePDF, generateCoverLetterPDF } from '../services/pdfGenerator';
 import { generateResumeDocx, generateCoverLetterDocx } from '../services/docxGenerator';
-import db from '../db/database';
+import prisma from '../lib/prisma';
+import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-const OUTPUT_DIR = path.join(__dirname, '../../../ai-workspace/output');
+import os from 'os';
+const OUTPUT_DIR = path.join(os.tmpdir(), 'job-search-output');
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-// Ensure output directory exists
-if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-}
-
-// Track generation status
 let generatingDoc: { jobId: number; type: string } | null = null;
 
-// Resume suggestions routes (must come before generic /:jobId/:type to avoid conflicts)
-// Get existing resume suggestions
-router.get('/:jobId/resume-suggestions', async (req, res) => {
+const VALID_TYPES = ['resume', 'cover_letter', 'linkedin', 'interview'];
+
+// GET /api/documents/:jobId/resume-suggestions
+router.get('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const { jobId } = req.params;
-    const suggestionsPath = path.join(OUTPUT_DIR, `job_${jobId}_resume_suggestions.json`);
+    const jobId = Number(req.params.jobId);
+    const suggestion = await prisma.resumeSuggestion.findUnique({
+      where: { user_id_job_id: { user_id: req.userId!, job_id: jobId } }
+    });
 
-    if (!fs.existsSync(suggestionsPath)) {
-      return res.json({ suggestions: null, generated_at: null });
-    }
+    if (!suggestion) return res.json({ suggestions: null, generated_at: null });
 
-    const data = JSON.parse(fs.readFileSync(suggestionsPath, 'utf-8'));
+    const data = suggestion.suggestions as Record<string, unknown>;
     res.json({
       suggestions: data.suggestions,
       recommended_resume: data.recommended_resume,
-      recommendation_reason: data.recommendation_reason,
-      generated_at: data.generated_at,
-      additional_context: data.additional_context
+      recommendation_reason: suggestion.recommendation_reason,
+      generated_at: suggestion.generated_at,
+      additional_context: suggestion.additional_context
     });
-
   } catch (error: any) {
     console.error('Error reading suggestions:', error);
     res.status(500).json({ error: error.message || 'Failed to read suggestions' });
   }
 });
 
-// Generate resume suggestions based on job description
-router.post('/:jobId/resume-suggestions', async (req, res) => {
+// POST /api/documents/:jobId/resume-suggestions
+router.post('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const { jobId } = req.params;
+    const jobId = Number(req.params.jobId);
     const { additionalContext } = req.body;
-    const jobIdNum = parseInt(jobId, 10);
+    const userId = req.userId!;
 
-    // Get job details
-    await db.read();
-    const job = db.data!.jobs.find(j => j.id === jobIdNum);
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
+    const job = await prisma.job.findFirst({ where: { id: jobId, user_id: userId } });
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    // Read resumes from DB
+    const resumes = await prisma.resume.findMany({
+      where: { user_id: userId },
+      orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }]
+    });
+
+    if (resumes.length === 0) {
+      return res.status(404).json({ error: 'No resumes found. Please upload at least one resume in the Profile page.' });
     }
 
-    // Read both resume versions
-    const resumeAiPath = path.join(__dirname, '../../../data/resumes/resume_ai.md');
-    const resumeGeneralPath = path.join(__dirname, '../../../data/resumes/resume_general.md');
-
-    if (!fs.existsSync(resumeAiPath) || !fs.existsSync(resumeGeneralPath)) {
-      return res.status(404).json({ error: 'Resume files not found. Need both resume_ai.md and resume_general.md' });
-    }
-
-    const resumeAiContent = fs.readFileSync(resumeAiPath, 'utf-8');
-    const resumeGeneralContent = fs.readFileSync(resumeGeneralPath, 'utf-8');
-
-    // Get company name
-    const company = db.data!.companies.find(c => c.id === job.company_id);
-    const companyName = company?.name || job.company_name || 'Unknown Company';
-
-    // Generate suggestions using Claude directly (simpler approach)
-    const { spawn } = require('child_process');
-    const { getConfig } = require('../services/claudeRunner');
-    const config = getConfig();
-
-    if (config.provider !== 'claude') {
+    const settings = await prisma.userSettings.findUnique({ where: { user_id: userId } });
+    if (settings?.ai_provider !== 'claude') {
       return res.status(400).json({ error: 'Resume suggestions only work with Claude provider. Please update settings.' });
     }
 
-    const additionalContextSection = additionalContext ? `
+    // Build resume sections for the prompt
+    const resumeSections = resumes.map((r, i) =>
+      `RESUME ${i + 1}: ${r.name}${r.is_default ? ' (default)' : ''}\n${r.content}`
+    ).join('\n\n---\n\n');
 
-ADDITIONAL CANDIDATE CONTEXT:
-The candidate has provided the following NEW information to consider for the resume:
-${additionalContext}
+    const resumeCount = resumes.length;
 
-IMPORTANT: Incorporate this new information into your suggestions. If the candidate mentions new projects, skills, or experience, suggest adding them to the resume (and what to remove to maintain 1-page length).` : '';
+    const additionalContextSection = additionalContext
+      ? `\n\nADDITIONAL CANDIDATE CONTEXT:\n${additionalContext}\n\nIMPORTANT: Incorporate this new information into your suggestions.`
+      : '';
 
-    const prompt = `You have TWO resume versions for the same candidate. Analyze both against this job and recommend which one to use.
+    const prompt = `You are an expert ATS resume reviewer and career coach. You have ${resumeCount} resume version(s) for a candidate. Analyze them against this job and give a COMPREHENSIVE, section-by-section review.
 
 JOB DETAILS:
 Title: ${job.title}
-Company: ${companyName}
+Company: ${job.company_name}
 Description: ${job.description || 'No description provided'}
 
-RESUME VERSION 1 (AI/ML focused):
-${resumeAiContent}
+${resumeSections}${additionalContextSection}
 
-RESUME VERSION 2 (General):
-${resumeGeneralContent}${additionalContextSection}
+## YOUR TASK
 
-TASK:
-1. First, determine which resume is better suited for this job
-2. Provide specific suggestions to tailor the RECOMMENDED resume for this job${additionalContext ? '\n3. Incorporate the additional candidate context into your suggestions' : ''}
+1. Recommend which resume to use for this specific job.
+2. Do a THOROUGH review of every section of the recommended resume — summary, skills, work experience bullets, education, projects, certifications. Leave nothing unchecked.
+3. For ATS compliance: flag missing keywords from the job description, weak action verbs, vague bullet points, missing metrics, formatting issues, and anything that would cause ATS rejection.
+4. For every issue found, provide the exact original text and a concrete improved replacement.
+5. Produce as many suggestions as needed — do NOT limit yourself. A thorough review should typically produce 10-20+ suggestions covering the entire resume.
 
-Your response MUST be a JSON object with this structure:
+Your response MUST be a valid JSON object:
 {
-  "recommended_resume": "resume_ai" or "resume_general",
-  "recommendation_reason": "1-2 sentences explaining why this resume is better for this job",
+  "recommended_resume": "${resumes[0].name}",
+  "recommendation_reason": "1-2 sentences explaining why this resume fits best",
   "suggestions": [
-    {
-      "type": "replace",
-      "original": "exact text to find",
-      "replacement": "exact text to use instead",
-      "reason": "why this change helps"
-    }
+    { "type": "replace", "original": "exact original text from resume", "replacement": "improved text", "reason": "specific reason — ATS keyword match, stronger action verb, added metric, etc." },
+    { "type": "add", "original": "", "replacement": "new bullet or section to add", "reason": "what's missing and why it matters" }
   ]
 }
 
-Each suggestion should be:
-1. SPECIFIC - Point to exact text to change (copy exact Markdown text)
-2. ACTIONABLE - Show exactly what to replace it with (in Markdown format)
-3. SPACE-AWARE - If adding something, suggest what to remove to keep it concise
+RULES:
+- recommended_resume must be the exact name of one of the resumes listed above
+- "original" must be the exact verbatim text from the resume so it can be found and replaced
+- Cover ALL sections — do not stop after a few suggestions
+- Flag every missing keyword from the job description that should be added
+- **CRITICAL — Page length:** Every replacement must fit in the SAME number of lines as the original. If the original is 1 line, the replacement must also be 1 line. Do NOT expand a single bullet into multiple lines or sentences. Rewrite within the same space — be concise and punchy. Never add new lines that weren't there before.
+- For "add" type suggestions (genuinely missing sections/keywords), keep additions to 1 line max
+- Output ONLY the JSON object, no other text`;
 
-Format your response as a JSON array of suggestions:
-[
-  {
-    "type": "replace",
-    "original": "exact text to find",
-    "replacement": "exact text to use instead",
-    "reason": "why this change helps for this specific job"
-  },
-  {
-    "type": "remove",
-    "text": "exact text to remove",
-    "reason": "why removing this helps (e.g., not relevant to this job)"
-  },
-  {
-    "type": "add",
-    "text": "exact text to add",
-    "location": "where to add it (after which line)",
-    "remove_to_compensate": "what to remove to keep 1-page",
-    "reason": "why adding this helps"
-  }
-]
-
-Focus on:
-- Keywords from job description that should appear in resume
-- Skills/technologies mentioned in job that candidate likely has
-- Reordering/emphasizing relevant experience
-- Removing less relevant content to make space
-
-Output ONLY the JSON array, no other text.`;
-
-    // Run Claude with simplified output
+    const { spawn } = require('child_process');
     const result: string = await new Promise((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
-
+      const useShell = process.platform === 'win32';
       const child = spawn('claude', ['-p', '--model', 'sonnet', '--dangerously-skip-permissions'], {
-        cwd: process.cwd(),
-        shell: true,
-        env,
+        cwd: process.cwd(), shell: useShell, env
       });
-
       let stdout = '';
       let stderr = '';
-
       child.stdout.on('data', (data: Buffer) => stdout += data.toString());
       child.stderr.on('data', (data: Buffer) => stderr += data.toString());
-
       child.stdin.write(prompt);
       child.stdin.end();
-
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve(stdout);
-        } else {
-          console.error('Claude stderr:', stderr);
-          reject(new Error(`Claude exited with code ${code}`));
-        }
+      child.on('close', (code: number) => {
+        if (code === 0) resolve(stdout);
+        else { console.error('Claude stderr:', stderr); reject(new Error(`Claude exited with code ${code}`)); }
       });
     });
 
-    // Extract JSON object from response (might be wrapped in markdown code blocks)
     const jsonMatch = result.match(/```json\s*(\{[\s\S]*?\})\s*```/) || result.match(/(\{[\s\S]*\})/);
-    if (!jsonMatch || !jsonMatch[1]) {
-      console.error('Could not find JSON in Claude response. First 500 chars:', result.substring(0, 500));
+    if (!jsonMatch?.[1]) {
       return res.status(500).json({ error: 'Failed to parse suggestions from AI' });
     }
 
     const response = JSON.parse(jsonMatch[1]);
     const { recommended_resume, recommendation_reason, suggestions } = response;
 
-    // Save suggestions to file so they persist across page changes
-    const suggestionsPath = path.join(OUTPUT_DIR, `job_${jobId}_resume_suggestions.json`);
-    const suggestionsData = {
-      job_id: jobIdNum,
-      job_title: job.title,
-      company: companyName,
-      generated_at: new Date().toISOString(),
-      recommended_resume,
-      recommendation_reason,
-      suggestions,
-      additional_context: additionalContext || null
-    };
-    fs.writeFileSync(suggestionsPath, JSON.stringify(suggestionsData, null, 2));
-
-    res.json({
-      suggestions,
-      recommended_resume,
-      recommendation_reason,
-      generated_at: suggestionsData.generated_at
+    await prisma.resumeSuggestion.upsert({
+      where: { user_id_job_id: { user_id: userId, job_id: jobId } },
+      create: {
+        user_id: userId,
+        job_id: jobId,
+        recommendation_reason,
+        suggestions: { recommended_resume, suggestions },
+        additional_context: additionalContext || null
+      },
+      update: {
+        recommendation_reason,
+        suggestions: { recommended_resume, suggestions },
+        additional_context: additionalContext || null,
+        generated_at: new Date()
+      }
     });
 
+    res.json({ suggestions, recommended_resume, recommendation_reason, generated_at: new Date().toISOString() });
   } catch (error: any) {
     console.error('Error generating resume suggestions:', error);
     res.status(500).json({ error: error.message || 'Failed to generate suggestions' });
   }
 });
 
-// Get document for a job
-router.get('/:jobId/:type', (req, res) => {
+// GET /api/documents/:jobId/:type
+router.get('/:jobId/:type', requireAuth, async (req: AuthRequest, res) => {
   try {
     const { jobId, type } = req.params;
+    if (!VALID_TYPES.includes(type)) return res.status(400).json({ error: 'Invalid document type' });
 
-    const typeToFile: Record<string, string> = {
-      resume: `job_${jobId}_resume.md`,
-      cover_letter: `job_${jobId}_cover_letter.md`,
-      linkedin: `job_${jobId}_linkedin.md`,
-      interview: `job_${jobId}_interview.md`,
-    };
+    const doc = await prisma.generatedDocument.findUnique({
+      where: { user_id_job_id_type: { user_id: req.userId!, job_id: Number(jobId), type } }
+    });
 
-    const filename = typeToFile[type];
-    if (!filename) {
-      return res.status(400).json({ error: 'Invalid document type' });
-    }
+    if (!doc) return res.status(404).json({ error: 'Document not found', exists: false });
 
-    const filePath = path.join(OUTPUT_DIR, filename);
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Document not found', exists: false });
-    }
-
-    const content = fs.readFileSync(filePath, 'utf-8');
-    res.json({ content, filename, type, exists: true });
+    res.json({ content: doc.content, type, exists: true });
   } catch (error) {
     console.error('Error reading document:', error);
     res.status(500).json({ error: 'Failed to read document' });
   }
 });
 
-// List all documents for a job
-router.get('/:jobId', (req, res) => {
+// GET /api/documents/:jobId
+router.get('/:jobId', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const { jobId } = req.params;
-
-    const types = ['resume', 'cover_letter', 'linkedin', 'interview'];
-    const documents: { type: string; filename: string; exists: boolean }[] = [];
-
-    for (const type of types) {
-      const filename = `job_${jobId}_${type}.md`;
-      const filePath = path.join(OUTPUT_DIR, filename);
-      documents.push({
-        type,
-        filename,
-        exists: fs.existsSync(filePath)
-      });
-    }
-
-    res.json({ documents });
+    const jobId = Number(req.params.jobId);
+    const docs = await prisma.generatedDocument.findMany({
+      where: { user_id: req.userId!, job_id: jobId },
+      select: { type: true }
+    });
+    const existingTypes = new Set(docs.map(d => d.type));
+    res.json({
+      documents: VALID_TYPES.map(type => ({ type, exists: existingTypes.has(type) }))
+    });
   } catch (error) {
     console.error('Error listing documents:', error);
     res.status(500).json({ error: 'Failed to list documents' });
   }
 });
 
-// Generate a document on-demand
-router.post('/:jobId/:type/generate', async (req, res) => {
+// POST /api/documents/:jobId/:type/generate
+router.post('/:jobId/:type/generate', requireAuth, async (req: AuthRequest, res) => {
   try {
     const { jobId, type } = req.params;
-    const jobIdNum = parseInt(jobId, 10);
+    const jobIdNum = Number(jobId);
+    const userId = req.userId!;
 
-    // Validate type
-    const validTypes = ['resume', 'cover_letter', 'linkedin', 'interview'];
-    if (!validTypes.includes(type)) {
-      return res.status(400).json({ error: 'Invalid document type' });
-    }
-
-    // Check if already generating
+    if (!VALID_TYPES.includes(type)) return res.status(400).json({ error: 'Invalid document type' });
     if (generatingDoc) {
-      return res.status(409).json({
-        error: 'Another document is being generated',
-        current: generatingDoc
-      });
+      return res.status(409).json({ error: 'Another document is being generated', current: generatingDoc });
     }
 
-    // Get job details from database
-    const job = db.data!.jobs.find(j => j.id === jobIdNum);
+    const job = await prisma.job.findFirst({ where: { id: jobIdNum, user_id: userId } });
+    if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
-    }
-
-    // Get company name
-    const company = db.data!.companies.find(c => c.id === job.company_id);
-    const companyName = company?.name || job.company_name || 'Unknown Company';
-
-    // Set generating status
     generatingDoc = { jobId: jobIdNum, type };
+    res.json({ success: true, message: 'Generation started', status: 'generating' });
 
-    // Return immediately, generation happens in background
-    res.json({
-      success: true,
-      message: 'Generation started',
-      status: 'generating'
-    });
-
-    // Generate document in background
+    // Generate in background
     try {
+      const [settings, profile] = await Promise.all([
+        prisma.userSettings.findUnique({ where: { user_id: userId } }),
+        prisma.userProfile.findUnique({ where: { user_id: userId } })
+      ]);
+      const config = {
+        provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
+        model: settings?.ai_model || undefined
+      };
+      const salary = job.salary_min && job.salary_max
+        ? `$${job.salary_min.toLocaleString()} - $${job.salary_max.toLocaleString()}` : undefined;
+
       const result = await generateDocument(
         jobIdNum,
         type as 'resume' | 'cover_letter' | 'linkedin' | 'interview',
-        job.title,
-        companyName,
-        job.description || '',
-        job.location,
-        job.salary_min && job.salary_max
-          ? `$${job.salary_min.toLocaleString()} - $${job.salary_max.toLocaleString()}`
-          : undefined
+        job.title, job.company_name, job.description || '',
+        config, profile?.content ?? undefined,
+        job.location ?? undefined, salary
       );
 
-      if (!result.success) {
+      if (result.success && result.content) {
+        await prisma.generatedDocument.upsert({
+          where: { user_id_job_id_type: { user_id: userId, job_id: jobIdNum, type } },
+          create: { user_id: userId, job_id: jobIdNum, type, content: result.content },
+          update: { content: result.content }
+        });
+      } else {
         console.error(`Failed to generate ${type}:`, result.error);
       }
     } finally {
       generatingDoc = null;
     }
-
   } catch (error) {
     console.error('Error starting document generation:', error);
     generatingDoc = null;
@@ -348,116 +260,92 @@ router.post('/:jobId/:type/generate', async (req, res) => {
   }
 });
 
-// Check generation status
-router.get('/:jobId/:type/status', (req, res) => {
-  const { jobId, type } = req.params;
-  const jobIdNum = parseInt(jobId, 10);
-
-  // Check if this document is being generated
-  const isGenerating = generatingDoc?.jobId === jobIdNum && generatingDoc?.type === type;
-
-  // Check if document exists
-  const filePath = path.join(OUTPUT_DIR, `job_${jobId}_${type}.md`);
-  const exists = fs.existsSync(filePath);
-
-  res.json({
-    generating: isGenerating,
-    exists,
-    log: isGenerating ? syncLog : []
-  });
-});
-
-// Generate and download PDF for resume or cover letter
-router.get('/:jobId/:type/pdf', async (req, res) => {
+// GET /api/documents/:jobId/:type/status
+router.get('/:jobId/:type/status', requireAuth, async (req: AuthRequest, res) => {
   try {
     const { jobId, type } = req.params;
-    const jobIdNum = parseInt(jobId, 10);
+    const isGenerating = generatingDoc?.jobId === Number(jobId) && generatingDoc?.type === type;
 
-    // Validate type
+    const doc = await prisma.generatedDocument.findUnique({
+      where: { user_id_job_id_type: { user_id: req.userId!, job_id: Number(jobId), type } }
+    });
+
+    res.json({ generating: isGenerating, exists: !!doc, log: isGenerating ? syncLog : [] });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get status' });
+  }
+});
+
+// GET /api/documents/:jobId/:type/pdf
+router.get('/:jobId/:type/pdf', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const { jobId, type } = req.params;
     if (type !== 'resume' && type !== 'cover_letter') {
       return res.status(400).json({ error: 'PDF only available for resume and cover_letter' });
     }
 
-    // Get job and candidate name from database
-    await db.read();
-    const job = db.data!.jobs.find(j => j.id === jobIdNum);
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
+    const [job, user] = await Promise.all([
+      prisma.job.findFirst({ where: { id: Number(jobId), user_id: req.userId! } }),
+      prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true } })
+    ]);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const candidateName = user?.name || 'Candidate';
+
+    // Ensure file exists for PDF generator (write from DB if needed)
+    const doc = await prisma.generatedDocument.findUnique({
+      where: { user_id_job_id_type: { user_id: req.userId!, job_id: Number(jobId), type } }
+    });
+    if (doc) {
+      fs.writeFileSync(path.join(OUTPUT_DIR, `job_${jobId}_${type}.md`), doc.content);
     }
 
-    // Read profile for candidate name
-    const profilePath = path.join(__dirname, '../../../data/profile.md');
-    let candidateName = 'Candidate';
-    if (fs.existsSync(profilePath)) {
-      const profile = fs.readFileSync(profilePath, 'utf-8');
-      const nameMatch = profile.match(/^#\s+(.+)$/m);
-      if (nameMatch &&  nameMatch[1]) candidateName = nameMatch[1].trim();
-    }
+    const pdfPath = type === 'resume'
+      ? await generateResumePDF(Number(jobId), candidateName)
+      : await generateCoverLetterPDF(Number(jobId), candidateName);
 
-    // Generate PDF
-    let pdfPath: string;
-    if (type === 'resume') {
-      pdfPath = await generateResumePDF(jobIdNum, candidateName);
-    } else {
-      pdfPath = await generateCoverLetterPDF(jobIdNum, candidateName);
-    }
-
-    // Send PDF file
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${path.basename(pdfPath)}"`);
     fs.createReadStream(pdfPath).pipe(res);
-
   } catch (error: any) {
     console.error('Error generating PDF:', error);
     res.status(500).json({ error: error.message || 'Failed to generate PDF' });
   }
 });
 
-// Generate and download DOCX for resume or cover letter
-router.get('/:jobId/:type/docx', async (req, res) => {
+// GET /api/documents/:jobId/:type/docx
+router.get('/:jobId/:type/docx', requireAuth, async (req: AuthRequest, res) => {
   try {
     const { jobId, type } = req.params;
-    const jobIdNum = parseInt(jobId, 10);
-
-    // Validate type
     if (type !== 'resume' && type !== 'cover_letter') {
       return res.status(400).json({ error: 'DOCX only available for resume and cover_letter' });
     }
 
-    // Get job and candidate name from database
-    await db.read();
-    const job = db.data!.jobs.find(j => j.id === jobIdNum);
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
+    const [job, user] = await Promise.all([
+      prisma.job.findFirst({ where: { id: Number(jobId), user_id: req.userId! } }),
+      prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true } })
+    ]);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const candidateName = user?.name || 'Candidate';
+
+    // Ensure file exists for DOCX generator
+    const doc = await prisma.generatedDocument.findUnique({
+      where: { user_id_job_id_type: { user_id: req.userId!, job_id: Number(jobId), type } }
+    });
+    if (doc) {
+      fs.writeFileSync(path.join(OUTPUT_DIR, `job_${jobId}_${type}.md`), doc.content);
     }
 
-    // Read profile for candidate name
-    const profilePath = path.join(__dirname, '../../../data/profile.md');
-    let candidateName = 'Candidate';
-    if (fs.existsSync(profilePath)) {
-      const profile = fs.readFileSync(profilePath, 'utf-8');
-      const nameMatch = profile.match(/^#\s+(.+)$/m);
-      if (nameMatch && nameMatch[1]) candidateName = nameMatch[1].trim();
-    }
+    const docxPath = type === 'resume'
+      ? await generateResumeDocx(Number(jobId), candidateName)
+      : await generateCoverLetterDocx(Number(jobId), candidateName);
 
-    // Generate DOCX
-    let docxPath: string;
-    if (type === 'resume') {
-      docxPath = await generateResumeDocx(jobIdNum, candidateName);
-    } else {
-      docxPath = await generateCoverLetterDocx(jobIdNum, candidateName);
-    }
-
-    // Send DOCX file
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${path.basename(docxPath)}"`);
     fs.createReadStream(docxPath).pipe(res);
-
   } catch (error: any) {
     console.error('Error generating DOCX:', error);
     res.status(500).json({ error: error.message || 'Failed to generate DOCX' });
   }
 });
 
-// Get existing resume suggestions
 export default router;

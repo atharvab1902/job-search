@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { apiFetch } from '../lib/api';
 
 export default function AddJob() {
   const navigate = useNavigate();
@@ -32,9 +33,8 @@ export default function AddJob() {
         salary_max: form.salary_max ? parseInt(form.salary_max) : null,
       };
 
-      const res = await fetch('/api/jobs', {
+      const res = await apiFetch('/api/jobs', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 

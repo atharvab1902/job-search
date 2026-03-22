@@ -2,9 +2,11 @@
 import htmlPdf from 'html-pdf-node';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { marked } from 'marked';
 
-const OUTPUT_DIR = path.join(__dirname, '../../../ai-workspace/output');
+const OUTPUT_DIR = path.join(os.tmpdir(), 'job-search-output');
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 /**
  * Converts markdown to ATS-friendly PDF using HTML rendering
@@ -145,7 +147,8 @@ export async function markdownToPDF(
       bottom: '0.5in',
       left: '0.75in',
       right: '0.75in'
-    }
+    },
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
   };
 
   const file = { content: html };

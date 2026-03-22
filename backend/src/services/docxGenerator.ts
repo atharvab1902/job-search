@@ -1,8 +1,10 @@
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, UnderlineType } from 'docx';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
-const OUTPUT_DIR = path.join(__dirname, '../../../ai-workspace/output');
+const OUTPUT_DIR = path.join(os.tmpdir(), 'job-search-output');
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 /**
  * Converts markdown resume to DOCX format (ATS-friendly)

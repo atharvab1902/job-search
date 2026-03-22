@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import type { Job, Reminder } from '../types';
+import { apiFetch } from '../lib/api';
 
 interface JobWithDetails extends Job {
   application?: {
@@ -59,7 +60,7 @@ export default function JobDetail() {
 
     for (const doc of docTypes) {
       try {
-        const res = await fetch(`/api/documents/${id}/${doc.type}`);
+        const res = await apiFetch(`/api/documents/${id}/${doc.type}`);
         if (res.ok) {
           const data = await res.json();
           statuses[doc.type] = {
@@ -80,7 +81,7 @@ export default function JobDetail() {
 
   const loadSuggestions = useCallback(async () => {
     try {
-      const res = await fetch(`/api/documents/${id}/resume-suggestions`);
+      const res = await apiFetch(`/api/documents/${id}/resume-suggestions`);
       const data = await res.json();
       if (data.suggestions) {
         setResumeSuggestions(data.suggestions);
@@ -107,7 +108,7 @@ export default function JobDetail() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/documents/${id}/${generatingType}/status`);
+        const res = await apiFetch(`/api/documents/${id}/${generatingType}/status`);
         const data = await res.json();
 
         setGenLog(data.log || []);
@@ -128,7 +129,7 @@ export default function JobDetail() {
 
   async function loadJob() {
     try {
-      const res = await fetch(`/api/jobs/${id}`);
+      const res = await apiFetch(`/api/jobs/${id}`);
       if (!res.ok) throw new Error('Job not found');
       const jobData = await res.json();
       setJob(jobData);
@@ -143,9 +144,9 @@ export default function JobDetail() {
   async function saveDescription() {
     if (!job) return;
     try {
-      await fetch(`/api/jobs/${id}`, {
+      await apiFetch(`/api/jobs/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+
         body: JSON.stringify({ description: descriptionText })
       });
       setEditingDescription(false);
@@ -170,7 +171,7 @@ export default function JobDetail() {
     }));
 
     try {
-      await fetch(`/api/documents/${id}/${type}/generate`, {
+      await apiFetch(`/api/documents/${id}/${type}/generate`, {
         method: 'POST'
       });
     } catch (error) {
@@ -186,9 +187,9 @@ export default function JobDetail() {
   async function updateStatus(status: string) {
     if (!job) return;
     try {
-      await fetch(`/api/jobs/${id}`, {
+      await apiFetch(`/api/jobs/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+
         body: JSON.stringify({ status })
       });
       loadJob();
@@ -201,7 +202,7 @@ export default function JobDetail() {
     if (!job) return;
     setH1bChecking(true);
     try {
-      const res = await fetch(`/api/h1b/check/${encodeURIComponent(job.company_name)}`);
+      const res = await apiFetch(`/api/h1b/check/${encodeURIComponent(job.company_name)}`);
       const data = await res.json();
       alert(`H1B Status for ${job.company_name}:\n\nSponsors: ${data.sponsors ? 'Yes' : data.sponsors === false ? 'No' : 'Unknown'}\nConfidence: ${data.confidence}\nPetitions: ${data.petitions}\n\n${data.note || ''}`);
       loadJob();
@@ -215,9 +216,9 @@ export default function JobDetail() {
   async function markApplied() {
     if (!job) return;
     try {
-      await fetch(`/api/jobs/${id}/apply`, {
+      await apiFetch(`/api/jobs/${id}/apply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+
         body: JSON.stringify({ resume_version: 'ai' })
       });
       loadJob();
@@ -229,7 +230,7 @@ export default function JobDetail() {
   async function deleteJob() {
     if (!confirm('Are you sure you want to delete this job?')) return;
     try {
-      await fetch(`/api/jobs/${id}`, { method: 'DELETE' });
+      await apiFetch(`/api/jobs/${id}`, { method: 'DELETE' });
       navigate('/jobs');
     } catch (error) {
       console.error('Error deleting job:', error);
@@ -240,9 +241,9 @@ export default function JobDetail() {
     setLoadingSuggestions(true);
     setShowSuggestions(true);
     try {
-      const res = await fetch(`/api/documents/${id}/resume-suggestions`, {
+      const res = await apiFetch(`/api/documents/${id}/resume-suggestions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+
         body: JSON.stringify({ additionalContext })
       });
       const data = await res.json();

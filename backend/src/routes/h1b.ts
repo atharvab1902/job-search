@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import db, { now } from '../db/database';
+import prisma from '../lib/prisma';
+import { requireAuth, AuthRequest } from '../middleware/auth';
 import Fuse from 'fuse.js';
 
 const router = Router();
@@ -11,102 +12,121 @@ function normalizeCompanyName(name: string): string {
     .trim();
 }
 
-// Check H1B status
-router.get('/check/:company', async (req, res) => {
+async function lookupH1BOnline(companyName: string): Promise<{ sponsors: boolean | null; petitions: number }> {
   try {
-    await db.read();
+    const query = encodeURIComponent(companyName);
+    const url = `https://h1bdata.info/index.php?em=${query}&job=&city=&year=All+Years`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return { sponsors: null, petitions: 0 };
+
+    const html = await res.text();
+
+    // Count table rows — each row is a petition record
+    const rowMatches = html.match(/<tr[^>]*class="odd|even/gi);
+    const petitions = rowMatches ? rowMatches.length : 0;
+
+    if (petitions > 0) return { sponsors: true, petitions };
+
+    // Check if "no records found" message appears
+    if (html.includes('no records') || html.includes('No results')) {
+      return { sponsors: false, petitions: 0 };
+    }
+
+    return { sponsors: null, petitions: 0 };
+  } catch {
+    return { sponsors: null, petitions: 0 };
+  }
+}
+
+// GET /api/h1b/check/:company
+router.get('/check/:company', requireAuth, async (req: AuthRequest, res) => {
+  try {
     const companyName = req.params.company;
     const normalized = normalizeCompanyName(companyName);
+    const userId = req.userId!;
 
-    // Check our companies table first
-    const company = db.data!.companies.find(
-      c => c.name.toLowerCase().includes(normalized.toLowerCase())
+    // Check user's companies table first
+    const companies = await prisma.company.findMany({
+      where: { user_id: userId },
+      select: { id: true, name: true, h1b_sponsor: true, h1b_petitions: true }
+    });
+
+    // Exact match
+    const exact = companies.find(c =>
+      normalizeCompanyName(c.name).toLowerCase() === normalized.toLowerCase()
     );
-
-    if (company && company.h1b_sponsor !== null) {
+    if (exact && exact.h1b_sponsor !== null) {
       return res.json({
         company: companyName,
-        sponsors: company.h1b_sponsor === 1,
+        sponsors: exact.h1b_sponsor === 1,
         confidence: 'high',
-        petitions: company.h1b_petitions || 0,
+        petitions: exact.h1b_petitions || 0,
         source: 'database'
       });
     }
 
-    // Check H1B data
-    const h1bRecords = db.data!.h1b_data.filter(
-      r => r.employer.toLowerCase().includes(normalized.toLowerCase())
-    );
-
-    if (h1bRecords.length > 0) {
-      const petitionCount = h1bRecords.length;
-
-      // Update company record if exists
-      if (company) {
-        company.h1b_sponsor = 1;
-        company.h1b_petitions = petitionCount;
-        company.updated_at = now();
-        await db.write();
-      }
-
-      return res.json({
-        company: companyName,
-        sponsors: true,
-        confidence: petitionCount > 10 ? 'high' : 'medium',
-        petitions: petitionCount,
-        source: 'h1b_data'
-      });
-    }
-
-    // Try fuzzy search
-    if (db.data!.h1b_data.length > 0) {
-      const employers = [...new Set(db.data!.h1b_data.map(r => r.employer))];
-      const fuse = new Fuse(employers, { threshold: 0.3 });
-      const fuzzyResults = fuse.search(normalized);
-
-      if (fuzzyResults.length > 0) {
-        const matchedEmployer = fuzzyResults[0].item;
-        const records = db.data!.h1b_data.filter(r => r.employer === matchedEmployer);
-
+    // Fuzzy match
+    if (companies.length > 0) {
+      const fuse = new Fuse(companies, { keys: ['name'], threshold: 0.3 });
+      const results = fuse.search(normalized);
+      if (results.length > 0 && results[0].item.h1b_sponsor !== null) {
+        const match = results[0].item;
         return res.json({
           company: companyName,
-          matchedAs: matchedEmployer,
-          sponsors: true,
+          matchedAs: match.name,
+          sponsors: match.h1b_sponsor === 1,
           confidence: 'medium',
-          petitions: records.length,
-          source: 'h1b_data_fuzzy'
+          petitions: match.h1b_petitions || 0,
+          source: 'database_fuzzy'
         });
       }
     }
 
-    // Unknown
-    res.json({
+    // Live lookup from h1bdata.info
+    const live = await lookupH1BOnline(normalized);
+
+    // Cache result in company record if it exists
+    if (live.sponsors !== null) {
+      const companyRecord = companies.find(c =>
+        normalizeCompanyName(c.name).toLowerCase() === normalized.toLowerCase()
+      );
+      if (companyRecord) {
+        await prisma.company.update({
+          where: { id: companyRecord.id },
+          data: { h1b_sponsor: live.sponsors ? 1 : 0, h1b_petitions: live.petitions }
+        });
+      }
+    }
+
+    return res.json({
       company: companyName,
-      sponsors: null,
-      confidence: 'unknown',
-      petitions: 0,
-      source: 'not_found',
-      note: 'Company not found in H1B database. May still sponsor - check manually at h1bdata.info'
+      sponsors: live.sponsors,
+      confidence: live.sponsors !== null ? 'high' : 'unknown',
+      petitions: live.petitions,
+      source: live.sponsors !== null ? 'h1bdata.info' : 'not_found',
+      note: live.sponsors === null ? 'Not found in h1bdata.info — check manually' : undefined
     });
+
   } catch (error) {
     console.error('Error checking H1B:', error);
     res.status(500).json({ error: 'Failed to check H1B status' });
   }
 });
 
-// Get H1B stats
-router.get('/stats', async (req, res) => {
+// GET /api/h1b/stats
+router.get('/stats', requireAuth, async (req: AuthRequest, res) => {
   try {
-    await db.read();
-    const total = db.data!.h1b_data.length;
-    const employers = new Set(db.data!.h1b_data.map(r => r.employer)).size;
-    const years = [...new Set(db.data!.h1b_data.map(r => r.year).filter(Boolean))].sort((a, b) => (b || 0) - (a || 0));
-
+    const count = await prisma.company.count({
+      where: { user_id: req.userId!, h1b_sponsor: { not: null } }
+    });
     res.json({
-      totalRecords: total,
-      uniqueEmployers: employers,
-      years,
-      note: total === 0 ? 'No H1B data loaded. H1B checks will use manual lookup.' : undefined
+      totalRecords: count,
+      uniqueEmployers: count,
+      years: [],
+      note: count === 0 ? 'H1B data loaded live from h1bdata.info per company lookup.' : undefined
     });
   } catch (error) {
     console.error('Error getting H1B stats:', error);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Reminder } from '../types';
+import { apiFetch } from '../lib/api';
 
 export default function Reminders() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -18,7 +19,7 @@ export default function Reminders() {
       if (filter === 'pending') params.set('completed', 'false');
       if (filter === 'completed') params.set('completed', 'true');
 
-      const res = await fetch(`/api/reminders?${params}`);
+      const res = await apiFetch(`/api/reminders?${params}`);
       setReminders(await res.json());
     } catch (error) {
       console.error('Error loading reminders:', error);
@@ -29,9 +30,8 @@ export default function Reminders() {
 
   async function toggleComplete(id: number, completed: boolean) {
     try {
-      await fetch(`/api/reminders/${id}`, {
+      await apiFetch(`/api/reminders/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ completed: !completed })
       });
       loadReminders();
@@ -43,7 +43,7 @@ export default function Reminders() {
   async function deleteReminder(id: number) {
     if (!confirm('Delete this reminder?')) return;
     try {
-      await fetch(`/api/reminders/${id}`, { method: 'DELETE' });
+      await apiFetch(`/api/reminders/${id}`, { method: 'DELETE' });
       loadReminders();
     } catch (error) {
       console.error('Error deleting reminder:', error);

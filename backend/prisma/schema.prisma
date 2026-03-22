@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 Int                 @id @default(autoincrement())
+  email              String              @unique
+  name               String
+  password           String
+  created_at         DateTime            @default(now())
+  updated_at         DateTime            @updatedAt
+  applications       Application[]
+  companies          Company[]
+  emailLogs          EmailLog[]
+  generatedDocuments GeneratedDocument[]
+  jobs               Job[]
+  reminders          Reminder[]
+  resumes            Resume[]
+  resumeSuggestions  ResumeSuggestion[]
+  profile            UserProfile?
+  settings           UserSettings?
+}
+
+model UserProfile {
+  id         Int      @id @default(autoincrement())
+  user_id    Int      @unique
+  content    String
+  updated_at DateTime @updatedAt
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model UserSettings {
+  id          Int      @id @default(autoincrement())
+  user_id     Int      @unique
+  ai_provider String   @default("gemini")
+  ai_model    String   @default("gemini-2.0-flash-exp")
+  updated_at  DateTime @updatedAt
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model Resume {
+  id                Int                @id @default(autoincrement())
+  user_id           Int
+  name              String
+  content           String
+  is_default        Boolean            @default(false)
+  created_at        DateTime           @default(now())
+  updated_at        DateTime           @updatedAt
+  user              User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  resumeSuggestions ResumeSuggestion[]
+}
+
+model Company {
+  id            Int      @id @default(autoincrement())
+  user_id       Int
+  name          String
+  h1b_sponsor   Int?
+  h1b_petitions Int      @default(0)
+  website       String?
+  notes         String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+  user          User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  jobs          Job[]
+}
+
+model Job {
+  id                 Int                 @id @default(autoincrement())
+  user_id            Int
+  company_id         Int?
+  title              String
+  company_name       String
+  location           String?
+  salary_min         Int?
+  salary_max         Int?
+  salary_type        String?
+  remote_type        String?
+  source             String
+  source_url         String?
+  description        String?
+  requirements       String?
+  status             String              @default("new")
+  priority           Int                 @default(0)
+  fit_score          Int?
+  notes              String?
+  h1b_sponsor        Int?
+  h1b_petitions      Int                 @default(0)
+  created_at         DateTime            @default(now())
+  updated_at         DateTime            @updatedAt
+  applications       Application[]
+  generatedDocuments GeneratedDocument[]
+  company            Company?            @relation(fields: [company_id], references: [id])
+  user               User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  reminders          Reminder[]
+  resumeSuggestions  ResumeSuggestion[]
+}
+
+model Application {
+  id             Int      @id @default(autoincrement())
+  user_id        Int
+  job_id         Int
+  applied_date   String
+  resume_version String?
+  notes          String?
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+  job            Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  user           User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model Reminder {
+  id           Int       @id @default(autoincrement())
+  user_id      Int
+  job_id       Int
+  type         String
+  due_date     String
+  message      String
+  completed    Boolean   @default(false)
+  completed_at DateTime?
+  created_at   DateTime  @default(now())
+  job          Job       @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  user         User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model GeneratedDocument {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  job_id     Int
+  type       String
+  content    String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  job        Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, job_id, type])
+}
+
+model ResumeSuggestion {
+  id                    Int      @id @default(autoincrement())
+  user_id               Int
+  job_id                Int
+  recommended_resume_id Int?
+  recommendation_reason String?
+  suggestions           Json
+  additional_context    String?
+  generated_at          DateTime @default(now())
+  job                   Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  recommended_resume    Resume?  @relation(fields: [recommended_resume_id], references: [id])
+  user                  User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, job_id])
+}
+
+model EmailLog {
+  id             Int       @id @default(autoincrement())
+  user_id        Int
+  email_id       String
+  subject        String?
+  from_address   String?
+  received_date  DateTime?
+  jobs_extracted Int       @default(0)
+  created_at     DateTime  @default(now())
+  user           User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, email_id])
+}

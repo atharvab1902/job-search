@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { Job, JobStatus } from '../types';
+import { apiFetch } from '../lib/api';
 
 export default function JobList() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -24,7 +25,7 @@ export default function JobList() {
       if (h1bOnly) params.set('h1b_only', 'true');
       if (search) params.set('search', search);
 
-      const res = await fetch(`/api/jobs?${params}`);
+      const res = await apiFetch(`/api/jobs?${params}`);
       const data = await res.json();
       setJobs(data.jobs || []);
       setTotal(data.total || 0);
@@ -47,9 +48,8 @@ export default function JobList() {
 
   async function updateJobStatus(id: number, newStatus: JobStatus) {
     try {
-      await fetch(`/api/jobs/${id}`, {
+      await apiFetch(`/api/jobs/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
       });
       loadJobs();

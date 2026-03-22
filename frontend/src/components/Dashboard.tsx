@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Stats, Job, Reminder } from '../types';
+import { apiFetch } from '../lib/api';
 
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -15,9 +16,9 @@ export default function Dashboard() {
   async function loadData() {
     try {
       const [statsRes, jobsRes, remindersRes] = await Promise.all([
-        fetch('/api/stats'),
-        fetch('/api/jobs?limit=5&sort=-created_at'),
-        fetch('/api/reminders?upcoming=true')
+        apiFetch('/api/stats'),
+        apiFetch('/api/jobs?limit=5&sort=-created_at'),
+        apiFetch('/api/reminders?upcoming=true')
       ]);
 
       setStats(await statsRes.json());

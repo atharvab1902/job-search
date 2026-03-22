@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
 
 interface SyncStatus {
   inProgress: boolean;
@@ -15,6 +16,7 @@ interface SyncStatus {
 export default function SyncJobs() {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [webLoading, setWebLoading] = useState(false);
   const [polling, setPolling] = useState(false);
 
   useEffect(() => {
@@ -22,7 +24,7 @@ export default function SyncJobs() {
   }, []);
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     if (polling) {
       interval = setInterval(checkStatus, 3000); // Poll every 3 seconds while syncing
     }
@@ -31,7 +33,7 @@ export default function SyncJobs() {
 
   async function checkStatus() {
     try {
-      const res = await fetch('/api/sync/status');
+      const res = await apiFetch('/api/sync/status');
       const data = await res.json();
       setStatus(data);
       setPolling(data.inProgress);
@@ -43,7 +45,7 @@ export default function SyncJobs() {
   async function startSync() {
     setLoading(true);
     try {
-      const res = await fetch('/api/sync/trigger', { method: 'POST' });
+      const res = await apiFetch('/api/sync/trigger', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         setPolling(true);
@@ -59,38 +61,68 @@ export default function SyncJobs() {
     }
   }
 
-  const isRunning = status?.inProgress || loading;
+  async function startWebFetch() {
+    setWebLoading(true);
+    try {
+      const res = await apiFetch('/api/sync/web-fetch', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setPolling(true);
+        checkStatus();
+      } else {
+        alert(data.error || 'Failed to start web fetch');
+      }
+    } catch (error) {
+      console.error('Error starting web fetch:', error);
+      alert('Failed to start web fetch');
+    } finally {
+      setWebLoading(false);
+    }
+  }
+
+  const isRunning = status?.inProgress || loading || webLoading;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Sync Jobs from Email</h1>
+      <h1 className="text-2xl font-bold">Find Jobs</h1>
 
-      {/* Main Sync Button */}
-      <div className="bg-white rounded-lg shadow p-8 text-center">
-        <button
-          onClick={startSync}
-          disabled={isRunning}
-          className={`px-8 py-4 text-xl font-semibold rounded-lg ${
-            isRunning
-              ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-blue-600 hover:bg-blue-700 text-white'
-          }`}
-        >
-          {isRunning ? (
-            <span className="flex items-center gap-3">
-              <svg className="animate-spin h-6 w-6" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
-              Syncing... Please Wait
-            </span>
-          ) : (
-            'Sync Jobs Now'
-          )}
-        </button>
-        <p className="mt-4 text-gray-600">
-          Scans your Indeed, LinkedIn, and Glassdoor emails for new job postings
-        </p>
+      {/* Two sync options */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Email Sync */}
+        <div className="bg-white rounded-lg shadow p-6 text-center">
+          <div className="text-4xl mb-3">📧</div>
+          <h2 className="text-lg font-semibold mb-2">Sync from Email</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Reads your Indeed, LinkedIn & Glassdoor job alert emails
+          </p>
+          <button
+            onClick={startSync}
+            disabled={isRunning}
+            className={`w-full py-3 font-semibold rounded-lg ${
+              isRunning ? 'bg-gray-300 cursor-not-allowed text-gray-500' : 'bg-blue-600 hover:bg-blue-700 text-white'
+            }`}
+          >
+            {loading ? 'Starting...' : 'Sync Emails'}
+          </button>
+        </div>
+
+        {/* Web Fetch */}
+        <div className="bg-white rounded-lg shadow p-6 text-center">
+          <div className="text-4xl mb-3">🌐</div>
+          <h2 className="text-lg font-semibold mb-2">Fetch from Web</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Searches Google Jobs for roles matching your resume posted in the last 12 hours
+          </p>
+          <button
+            onClick={startWebFetch}
+            disabled={isRunning}
+            className={`w-full py-3 font-semibold rounded-lg ${
+              isRunning ? 'bg-gray-300 cursor-not-allowed text-gray-500' : 'bg-purple-600 hover:bg-purple-700 text-white'
+            }`}
+          >
+            {webLoading ? 'Starting...' : 'Search Web'}
+          </button>
+        </div>
       </div>
 
       {/* Status Display */}
