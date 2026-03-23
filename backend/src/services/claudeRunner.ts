@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 const PROJECT_ROOT = path.join(__dirname, '../../..');
 
@@ -9,6 +10,65 @@ export type Provider = 'claude' | 'gemini';
 export interface ProviderConfig {
   provider: Provider;
   model?: string;
+  // OAuth tokens for Claude (replaces credential file mounting)
+  claudeAccessToken?: string;
+  claudeRefreshToken?: string;
+  claudeTokenExpiry?: bigint | null;
+  // API key for Gemini (legacy)
+  geminiApiKey?: string;
+  // OAuth tokens for Gemini
+  geminiAccessToken?: string;
+  geminiRefreshToken?: string;
+  geminiTokenExpiry?: bigint | null;
+}
+
+/**
+ * Writes Claude OAuth credentials to a per-user temp directory.
+ * Returns the HOME path to use when spawning claude CLI.
+ */
+export function writeClaudeCredentialsForUser(userId: number, config: Pick<ProviderConfig, 'claudeAccessToken' | 'claudeRefreshToken' | 'claudeTokenExpiry'>): string {
+  return writeClaudeCredentials(userId, config as ProviderConfig);
+}
+
+function writeClaudeCredentials(userId: number, config: ProviderConfig): string {
+  const homeDir = path.join(os.tmpdir(), `claude-home-${userId}`);
+  const claudeDir = path.join(homeDir, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+
+  const credentials = {
+    claudeAiOauth: {
+      accessToken: config.claudeAccessToken,
+      refreshToken: config.claudeRefreshToken,
+      expiresAt: config.claudeTokenExpiry ? Number(config.claudeTokenExpiry) : undefined,
+      scopes: ['org:create_api_key', 'user:profile', 'user:inference', 'user:sessions:claude_code'],
+    }
+  };
+  fs.writeFileSync(path.join(claudeDir, '.credentials.json'), JSON.stringify(credentials, null, 2));
+  return homeDir;
+}
+
+/**
+ * Writes Gemini OAuth credentials to a per-user temp directory.
+ * Returns the HOME path to use when spawning gemini CLI.
+ */
+function writeGeminiCredentials(userId: number, config: ProviderConfig): string {
+  const homeDir = path.join(os.tmpdir(), `gemini-home-${userId}`);
+  const geminiDir = path.join(homeDir, '.gemini');
+  fs.mkdirSync(geminiDir, { recursive: true });
+
+  const credentials = {
+    access_token: config.geminiAccessToken,
+    refresh_token: config.geminiRefreshToken || null,
+    token_type: 'Bearer',
+    expiry_date: config.geminiTokenExpiry ? Number(config.geminiTokenExpiry) : undefined,
+    scope: 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
+  };
+  fs.writeFileSync(path.join(geminiDir, 'oauth_creds.json'), JSON.stringify(credentials, null, 2), { mode: 0o600 });
+
+  const settings = { security: { auth: { selectedType: 'oauth-personal' } } };
+  fs.writeFileSync(path.join(geminiDir, 'settings.json'), JSON.stringify(settings, null, 2));
+
+  return homeDir;
 }
 
 export interface SyncResult {
@@ -51,7 +111,7 @@ function addLog(message: string) {
   if (syncLog.length > 50) syncLog.shift();
 }
 
-function runClaude(prompt: string, cwd: string, timeoutMs: number, model?: string): Promise<{ stdout: string; stderr: string }> {
+function runClaude(prompt: string, cwd: string, timeoutMs: number, model?: string, config?: ProviderConfig, userId?: number): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     // Sanitize model — reject non-claude model names (e.g. gemini-* left over from settings)
     const validModels = ['haiku', 'sonnet', 'opus'];
@@ -59,6 +119,13 @@ function runClaude(prompt: string, cwd: string, timeoutMs: number, model?: strin
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', resolvedModel, '--dangerously-skip-permissions', '--max-turns', '30'];
     const env = { ...process.env };
     delete env.CLAUDECODE;
+
+    // If user has OAuth tokens, write credentials file and set HOME
+    if (config?.claudeAccessToken && userId) {
+      const homeDir = writeClaudeCredentials(userId, config);
+      env.HOME = homeDir;
+      addLog('Using user OAuth credentials for Claude...');
+    }
 
     // shell:true is only needed on Windows (cmd.exe wrapper); on Linux spawn directly
     const useShell = process.platform === 'win32';
@@ -108,13 +175,24 @@ function runClaude(prompt: string, cwd: string, timeoutMs: number, model?: strin
   });
 }
 
-function runGemini(prompt: string, cwd: string, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+function runGemini(prompt: string, cwd: string, timeoutMs: number, config?: ProviderConfig, userId?: number): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    // If user has OAuth tokens, write credentials file and set HOME
+    if (config?.geminiAccessToken && userId) {
+      const homeDir = writeGeminiCredentials(userId, config);
+      env.HOME = homeDir;
+      addLog('Using user Google OAuth credentials for Gemini...');
+    } else if (config?.geminiApiKey) {
+      // Legacy: inject API key
+      env.GEMINI_API_KEY = config.geminiApiKey;
+      addLog('Using user Gemini API key...');
+    }
     const child = spawn('gemini', ['-p', '.', '--output-format', 'stream-json', '-y'], {
-      cwd, shell: true, timeout: timeoutMs, env: { ...process.env }, windowsHide: true
+      cwd, shell: true, timeout: timeoutMs, env, windowsHide: true
     });
 
-    let stdout = '', stderr = '', lineBuffer = '';
+    let stdout = '', stderr = '', lineBuffer = '', resultText = '';
 
     child.stdout.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -126,10 +204,9 @@ function runGemini(prompt: string, cwd: string, timeoutMs: number): Promise<{ st
         if (!line.trim()) continue;
         try {
           const event = JSON.parse(line);
-          if (event.type === 'assistant' && event.message?.content) {
-            for (const block of event.message.content) {
-              if (block.type === 'text' && block.text?.trim()) addLog(block.text.trim().substring(0, 200));
-            }
+          // Gemini streams assistant content as delta message events
+          if (event.type === 'message' && event.role === 'assistant' && event.delta && typeof event.content === 'string') {
+            resultText += event.content;
           }
           if (event.type === 'result') addLog('Complete.');
         } catch {
@@ -138,10 +215,14 @@ function runGemini(prompt: string, cwd: string, timeoutMs: number): Promise<{ st
       }
     });
 
-    child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+    child.stderr.on('data', (data: Buffer) => {
+      const text = data.toString();
+      stderr += text;
+      if (text.trim()) addLog(`[gemini stderr] ${text.trim().substring(0, 300)}`);
+    });
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
+      if (code === 0) resolve({ stdout: resultText || stdout, stderr });
       else {
         const err: any = new Error(`gemini exited with code ${code}`);
         err.stdout = stdout; err.stderr = stderr;
@@ -153,13 +234,18 @@ function runGemini(prompt: string, cwd: string, timeoutMs: number): Promise<{ st
   });
 }
 
-function runWithProvider(prompt: string, cwd: string, timeoutMs: number, config: ProviderConfig): Promise<{ stdout: string; stderr: string }> {
+function runWithProvider(prompt: string, cwd: string, timeoutMs: number, config: ProviderConfig, userId?: number): Promise<{ stdout: string; stderr: string }> {
   if (config.provider === 'gemini') {
     addLog('Using Gemini CLI...');
-    return runGemini(prompt, cwd, timeoutMs);
+    return runGemini(prompt, cwd, timeoutMs, config, userId);
   }
   addLog(`Using Claude CLI (${config.model || 'sonnet'})...`);
-  return runClaude(prompt, cwd, timeoutMs, config.model);
+  return runClaude(prompt, cwd, timeoutMs, config.model, config, userId);
+}
+
+export async function runForSuggestions(prompt: string, config: ProviderConfig, userId?: number): Promise<string> {
+  const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 180000, config, userId);
+  return stdout;
 }
 
 // ─── Job Sync ─────────────────────────────────────────────────────────────────
@@ -257,7 +343,8 @@ After processing all portals, output ONLY this JSON (no other text):
 export async function runWebJobFetch(
   resumeContent: string,
   existingJobKeys: string[],
-  config: ProviderConfig
+  config: ProviderConfig,
+  userId?: number
 ): Promise<{ success: boolean; jobs: ExtractedJob[]; error?: string }> {
   const existingList = existingJobKeys.length > 0
     ? `\nSKIP THESE (already in database — match by title+company):\n${existingJobKeys.slice(0, 100).join('\n')}`
@@ -295,6 +382,8 @@ Do EXACTLY 5 searches, no more. Aim to collect at least 10 unique currently-open
 
 **Step 4 — Extract the direct apply link.** For Google Jobs listings use the actual employer/company career page URL if visible, otherwise use the Google Jobs URL.
 
+**Step 5 — For each job URL collected, use WebFetch to visit the page and extract the FULL job description.** Company career pages (Workday, Greenhouse, Lever, Workable, Ashby, etc.) are accessible — fetch them. For LinkedIn or Indeed listings where the full description is not accessible, use whatever description text you can get from the search snippet. Put the full description text in the "description" field.
+
 ${existingList}
 
 ## OUTPUT FORMAT
@@ -313,7 +402,7 @@ Output ONLY this JSON (no other text):
       "remote_type": "hybrid",
       "source": "web",
       "source_url": "https://careers.google.com/...",
-      "description": "1-2 sentence description",
+      "description": "Full job description text fetched from the page...",
       "email_id": null
     }
   ]
@@ -327,13 +416,14 @@ Output ONLY this JSON (no other text):
 - source: always "web"
 - Skip jobs already in the database
 - Skip any job requiring US Citizenship, security clearance, "no sponsorship", or from trading firms — candidate is on F1 OPT
+- description must be the full job description from the actual page — not a summary. If WebFetch fails for a URL, use whatever text is available from search.
 - Return at least 10 jobs if found, up to 15
 - If no qualifying jobs found: {"success": true, "jobs": []}`;
 
   try {
     syncLog.length = 0;
-    addLog('Analyzing resume and searching for matching jobs...');
-    const { stdout } = await runClaude(prompt, PROJECT_ROOT, 600000, config.model);
+    addLog(`Analyzing resume and searching for matching jobs using ${config.provider}...`);
+    const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 900000, config, userId);
 
     const jsonMatch = stdout.match(/\{\s*"success"\s*:\s*true[\s\S]*?"jobs"\s*:\s*\[[\s\S]*?\]\s*\}/);
     if (jsonMatch) {
@@ -366,7 +456,8 @@ export async function generateDocument(
   config: ProviderConfig,
   profileContent?: string,
   location?: string,
-  salary?: string
+  salary?: string,
+  userId?: number
 ): Promise<DocGenResult> {
   const profile = profileContent
     ? `\nCANDIDATE PROFILE:\n${profileContent}\n`
@@ -422,7 +513,7 @@ Include:
   try {
     syncLog.length = 0;
     addLog(`Generating ${docType} for job ${jobId}...`);
-    const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 120000, config);
+    const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 120000, config, userId);
 
     const content = stdout.trim();
     if (content) {
@@ -444,13 +535,14 @@ export async function generateDocumentsForJob(
   companyName: string,
   description: string,
   config: ProviderConfig,
-  profileContent?: string
+  profileContent?: string,
+  userId?: number
 ): Promise<boolean> {
   const results = await Promise.all([
-    generateDocument(jobId, 'resume', jobTitle, companyName, description, config, profileContent),
-    generateDocument(jobId, 'cover_letter', jobTitle, companyName, description, config, profileContent),
-    generateDocument(jobId, 'linkedin', jobTitle, companyName, description, config, profileContent),
-    generateDocument(jobId, 'interview', jobTitle, companyName, description, config, profileContent),
+    generateDocument(jobId, 'resume', jobTitle, companyName, description, config, profileContent, undefined, undefined, userId),
+    generateDocument(jobId, 'cover_letter', jobTitle, companyName, description, config, profileContent, undefined, undefined, userId),
+    generateDocument(jobId, 'linkedin', jobTitle, companyName, description, config, profileContent, undefined, undefined, userId),
+    generateDocument(jobId, 'interview', jobTitle, companyName, description, config, profileContent, undefined, undefined, userId),
   ]);
   return results.every(r => r.success);
 }

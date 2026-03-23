@@ -16,7 +16,7 @@ RUN npx prisma generate
 # Stage 2: Run
 FROM node:20-alpine
 
-RUN apk add --no-cache openssl coreutils su-exec chromium nss freetype harfbuzz ca-certificates ttf-freefont
+RUN apk add --no-cache openssl coreutils su-exec chromium nss freetype harfbuzz ca-certificates ttf-freefont libsecret
 
 WORKDIR /app/backend
 

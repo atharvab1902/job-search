@@ -11,6 +11,8 @@ interface ProviderInfo {
 interface SettingsData {
   provider: string;
   model: string;
+  claudeConnected: boolean;
+  geminiConnected: boolean;
   availableProviders: ProviderInfo[];
 }
 
@@ -19,6 +21,10 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [oauthCode, setOauthCode] = useState('');
+  const [oauthStep, setOauthStep] = useState<'idle' | 'waiting'>('idle');
+  const [geminiOauthCode, setGeminiOauthCode] = useState('');
+  const [geminiOauthStep, setGeminiOauthStep] = useState<'idle' | 'waiting'>('idle');
 
   useEffect(() => {
     loadSettings();
@@ -35,6 +41,82 @@ export default function Settings() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function startClaudeOAuth() {
+    try {
+      const res = await apiFetch('/api/settings/claude-oauth/start');
+      const { url } = await res.json();
+      window.open(url, '_blank');
+      setOauthStep('waiting');
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to start OAuth flow' });
+    }
+  }
+
+  async function submitClaudeCode() {
+    if (!oauthCode.trim()) return;
+    try {
+      const res = await apiFetch('/api/settings/claude-oauth/exchange', {
+        method: 'POST',
+        body: JSON.stringify({ code: oauthCode.trim() })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage({ type: 'success', text: data.message });
+        setOauthStep('idle');
+        setOauthCode('');
+        loadSettings();
+      } else {
+        setMessage({ type: 'error', text: data.error });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to connect Claude account' });
+    }
+  }
+
+  async function disconnectClaude() {
+    await apiFetch('/api/settings/claude-oauth', { method: 'DELETE' });
+    setMessage({ type: 'success', text: 'Claude account disconnected' });
+    loadSettings();
+  }
+
+  async function startGeminiOAuth() {
+    try {
+      const res = await apiFetch('/api/settings/gemini-oauth/start');
+      const { url } = await res.json();
+      window.open(url, '_blank');
+      setGeminiOauthStep('waiting');
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to start Gemini OAuth flow' });
+    }
+  }
+
+  async function submitGeminiCode() {
+    if (!geminiOauthCode.trim()) return;
+    try {
+      const res = await apiFetch('/api/settings/gemini-oauth/exchange', {
+        method: 'POST',
+        body: JSON.stringify({ code: geminiOauthCode.trim() })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage({ type: 'success', text: data.message });
+        setGeminiOauthStep('idle');
+        setGeminiOauthCode('');
+        loadSettings();
+      } else {
+        setMessage({ type: 'error', text: data.error });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to connect Google account' });
+    }
+  }
+
+  async function disconnectGemini() {
+    await apiFetch('/api/settings/gemini-oauth', { method: 'DELETE' });
+    setMessage({ type: 'success', text: 'Google account disconnected' });
+    loadSettings();
   }
 
   async function saveSettings(provider: string, model: string) {
@@ -177,6 +259,90 @@ export default function Settings() {
             </p>
                       </div>
         )}
+
+        {/* Account Connections */}
+        <div className="border-t pt-6 mb-8">
+          <h2 className="text-lg font-semibold mb-2">Account Connections</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Connect your accounts so the app can use your own subscription — no API keys, no extra charges.
+          </p>
+          <div className="space-y-4">
+
+            {/* Claude */}
+            <div className="border rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium flex items-center gap-2">
+                    Claude (Anthropic)
+                    {settings.claudeConnected
+                      ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Connected</span>
+                      : <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">Not connected</span>}
+                  </div>
+                  <p className="text-sm text-gray-500 mt-1">Uses your Claude Pro subscription via OAuth</p>
+                </div>
+                {settings.claudeConnected
+                  ? <button onClick={disconnectClaude} className="text-sm text-red-600 hover:underline">Disconnect</button>
+                  : <button onClick={startClaudeOAuth} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">Connect Claude</button>
+                }
+              </div>
+              {oauthStep === 'waiting' && (
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                  <p className="text-sm text-blue-800 mb-2">
+                    A page opened on Anthropic's website. After logging in, copy the code shown and paste it below:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={oauthCode}
+                      onChange={e => setOauthCode(e.target.value)}
+                      placeholder="Paste code here..."
+                      className="flex-1 border rounded px-3 py-2 text-sm"
+                    />
+                    <button onClick={submitClaudeCode} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">Submit</button>
+                    <button onClick={() => setOauthStep('idle')} className="px-3 py-2 text-gray-500 text-sm hover:underline">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Gemini */}
+            <div className="border rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium flex items-center gap-2">
+                    Gemini (Google)
+                    {settings.geminiConnected
+                      ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Connected</span>
+                      : <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">Not connected</span>}
+                  </div>
+                  <p className="text-sm text-gray-500 mt-1">Uses your Google account via OAuth — no API key needed</p>
+                </div>
+                {settings.geminiConnected
+                  ? <button onClick={disconnectGemini} className="text-sm text-red-600 hover:underline">Disconnect</button>
+                  : <button onClick={startGeminiOAuth} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">Connect Google</button>
+                }
+              </div>
+              {geminiOauthStep === 'waiting' && (
+                <div className="mt-4 p-3 bg-purple-50 rounded-lg">
+                  <p className="text-sm text-purple-800 mb-2">
+                    A Google sign-in page opened. After signing in, you'll be redirected to a page showing an authorization code. Copy that code and paste it below:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={geminiOauthCode}
+                      onChange={e => setGeminiOauthCode(e.target.value)}
+                      placeholder="Paste authorization code here..."
+                      className="flex-1 border rounded px-3 py-2 text-sm"
+                    />
+                    <button onClick={submitGeminiCode} className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700">Submit</button>
+                    <button onClick={() => setGeminiOauthStep('idle')} className="px-3 py-2 text-gray-500 text-sm hover:underline">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* Token Usage Info */}
         <div className="border-t pt-6">

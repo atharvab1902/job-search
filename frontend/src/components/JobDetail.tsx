@@ -48,6 +48,10 @@ export default function JobDetail() {
   const [recommendationReason, setRecommendationReason] = useState<string | null>(null);
   const [additionalContext, setAdditionalContext] = useState<string>('');
   const [usedContext, setUsedContext] = useState<string | null>(null);
+  const [qaList, setQaList] = useState<{ id: number; question: string; answer: string }[]>([]);
+  const [qaQuestion, setQaQuestion] = useState('');
+  const [qaGenerating, setQaGenerating] = useState(false);
+  const [qaError, setQaError] = useState<string | null>(null);
 
   const docTypes: GeneratedDoc[] = [
     { type: 'cover_letter', label: 'Cover Letter', icon: '✉️', filename: `job_${id}_cover_letter.md` },
@@ -100,6 +104,7 @@ export default function JobDetail() {
     loadJob();
     loadDocuments();
     loadSuggestions();
+    apiFetch(`/api/documents/${id}/qa`).then(r => r.json()).then(d => Array.isArray(d) && setQaList(d)).catch(() => {});
   }, [id, loadDocuments, loadSuggestions]);
 
   // Poll for generation status
@@ -156,6 +161,31 @@ export default function JobDetail() {
       console.error('Error updating description:', error);
       alert('Failed to update description');
     }
+  }
+
+  async function askQuestion() {
+    if (!qaQuestion.trim() || qaGenerating) return;
+    setQaGenerating(true);
+    setQaError(null);
+    try {
+      const res = await apiFetch(`/api/documents/${id}/qa`, {
+        method: 'POST',
+        body: JSON.stringify({ question: qaQuestion.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setQaList(prev => [...prev, data]);
+      setQaQuestion('');
+    } catch (err: any) {
+      setQaError(err.message || 'Failed to generate answer');
+    } finally {
+      setQaGenerating(false);
+    }
+  }
+
+  async function deleteQA(qaId: number) {
+    await apiFetch(`/api/documents/${id}/qa/${qaId}`, { method: 'DELETE' });
+    setQaList(prev => prev.filter(q => q.id !== qaId));
   }
 
   async function generateDoc(type: string) {
@@ -588,19 +618,19 @@ export default function JobDetail() {
                   {hasDoc && <span className="text-xs">✓</span>}
                 </button>
 
-                {!hasDoc && (
-                  <button
-                    onClick={() => generateDoc(doc.type)}
-                    disabled={isGenerating || !!generatingType}
-                    className={`px-3 py-2 rounded text-sm ${
-                      isGenerating
-                        ? 'bg-yellow-100 text-yellow-800 animate-pulse'
-                        : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'
-                    }`}
-                  >
-                    {isGenerating ? 'Generating...' : 'Generate'}
-                  </button>
-                )}
+                <button
+                  onClick={() => generateDoc(doc.type)}
+                  disabled={isGenerating || !!generatingType}
+                  className={`px-3 py-2 rounded text-sm ${
+                    isGenerating
+                      ? 'bg-yellow-100 text-yellow-800 animate-pulse'
+                      : hasDoc
+                      ? 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50'
+                      : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'
+                  }`}
+                >
+                  {isGenerating ? 'Generating...' : hasDoc ? '↺' : 'Generate'}
+                </button>
               </div>
             );
           })}
@@ -676,6 +706,59 @@ export default function JobDetail() {
           <div className="prose max-w-none whitespace-pre-wrap">{job.description}</div>
         </div>
       )}
+
+      {/* Application Q&A */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-lg font-semibold mb-1">Application Q&A</h2>
+        <p className="text-sm text-gray-500 mb-4">Paste any application question — AI answers it using your resume and profile.</p>
+
+        <div className="flex gap-2 mb-4">
+          <textarea
+            value={qaQuestion}
+            onChange={e => setQaQuestion(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) askQuestion(); }}
+            placeholder="e.g. Describe yourself. / Tell me about a challenge you faced. / Why do you want to work here?"
+            rows={2}
+            className="flex-1 border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={askQuestion}
+            disabled={qaGenerating || !qaQuestion.trim()}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 self-end"
+          >
+            {qaGenerating ? 'Generating...' : 'Answer'}
+          </button>
+        </div>
+
+        {qaError && <p className="text-red-500 text-sm mb-3">{qaError}</p>}
+
+        {qaGenerating && (
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-500 animate-pulse">
+            Generating answer from your resume and profile...
+          </div>
+        )}
+
+        <div className="space-y-4">
+          {qaList.map(qa => (
+            <div key={qa.id} className="border rounded-lg p-4">
+              <div className="flex justify-between items-start mb-2">
+                <p className="font-medium text-sm text-gray-800">Q: {qa.question}</p>
+                <button onClick={() => deleteQA(qa.id)} className="text-gray-400 hover:text-red-500 text-xs ml-2 shrink-0">✕</button>
+              </div>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">{qa.answer}</p>
+              <button
+                onClick={() => navigator.clipboard.writeText(qa.answer)}
+                className="mt-2 text-xs text-blue-600 hover:underline"
+              >
+                Copy answer
+              </button>
+            </div>
+          ))}
+          {qaList.length === 0 && !qaGenerating && (
+            <p className="text-gray-400 text-sm">No questions yet. Ask your first one above.</p>
+          )}
+        </div>
+      </div>
 
       {/* Application Info */}
       {job.application && (

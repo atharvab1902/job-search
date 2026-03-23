@@ -24,7 +24,14 @@ router.post('/trigger', requireAuth, async (req: AuthRequest, res) => {
     const settings = await prisma.userSettings.findUnique({ where: { user_id: userId } });
     const config = {
       provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
-      model: settings?.ai_model || undefined
+      model: settings?.ai_model || undefined,
+      claudeAccessToken: settings?.claude_access_token || undefined,
+      claudeRefreshToken: settings?.claude_refresh_token || undefined,
+      claudeTokenExpiry: settings?.claude_token_expiry || undefined,
+      geminiApiKey: settings?.gemini_api_key || undefined,
+      geminiAccessToken: settings?.gemini_access_token || undefined,
+      geminiRefreshToken: settings?.gemini_refresh_token || undefined,
+      geminiTokenExpiry: settings?.gemini_token_expiry || undefined,
     };
 
     // Get existing jobs to avoid duplicates
@@ -124,7 +131,10 @@ router.post('/web-fetch', requireAuth, async (req: AuthRequest, res) => {
     const settings = await prisma.userSettings.findUnique({ where: { user_id: userId } });
     const config = {
       provider: 'claude' as const,
-      model: settings?.ai_model || 'sonnet'
+      model: settings?.ai_model || 'sonnet',
+      claudeAccessToken: settings?.claude_access_token || undefined,
+      claudeRefreshToken: settings?.claude_refresh_token || undefined,
+      claudeTokenExpiry: settings?.claude_token_expiry || undefined,
     };
 
     const existingJobs = await prisma.job.findMany({
@@ -138,7 +148,7 @@ router.post('/web-fetch', requireAuth, async (req: AuthRequest, res) => {
       `--- RESUME ${i + 1}${r.is_default ? ' (Default)' : ''} ---\n${r.content}`
     ).join('\n\n');
 
-    const result = await runWebJobFetch(combinedResumes, existingKeys, config);
+    const result = await runWebJobFetch(combinedResumes, existingKeys, config, userId);
 
     let jobsAdded = 0;
     if (result.success && result.jobs.length > 0) {
@@ -214,13 +224,20 @@ router.post('/generate/:jobId', requireAuth, async (req: AuthRequest, res) => {
 
   const config = {
     provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
-    model: settings?.ai_model || undefined
+    model: settings?.ai_model || undefined,
+    claudeAccessToken: settings?.claude_access_token || undefined,
+    claudeRefreshToken: settings?.claude_refresh_token || undefined,
+    claudeTokenExpiry: settings?.claude_token_expiry || undefined,
+    geminiApiKey: settings?.gemini_api_key || undefined,
+    geminiAccessToken: settings?.gemini_access_token || undefined,
+    geminiRefreshToken: settings?.gemini_refresh_token || undefined,
+    geminiTokenExpiry: settings?.gemini_token_expiry || undefined,
   };
 
   res.json({ success: true, message: 'Document generation started', status: 'running' });
 
   try {
-    await generateDocumentsForJob(job.id, job.title, job.company_name, job.description || '', config, profile?.content);
+    await generateDocumentsForJob(job.id, job.title, job.company_name, job.description || '', config, profile?.content, userId);
     console.log(`Documents generated for job ${jobId}`);
   } catch (error) {
     console.error(`Error generating documents for job ${jobId}:`, error);

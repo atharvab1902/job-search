@@ -30,10 +30,6 @@ services:
         condition: service_healthy
     volumes:
       - ai_workspace:/app/ai-workspace
-      # Mount local CLI auth so claude and gemini use your logged-in account
-      - C:/Users/athar/.claude:/home/node/.claude:ro
-      - C:/Users/athar/.claude.json:/home/node/.claude.json:ro
-      - C:/Users/athar/.gemini:/home/node/.gemini:ro
       - C:/Users/athar/.gmail-mcp:/home/node/.gmail-mcp:ro
     ports:
       - "3001:3001"

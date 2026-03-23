@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { generateDocument, syncLog } from '../services/claudeRunner';
+import { generateDocument, syncLog, runForSuggestions } from '../services/claudeRunner';
 import { generateResumePDF, generateCoverLetterPDF } from '../services/pdfGenerator';
 import { generateResumeDocx, generateCoverLetterDocx } from '../services/docxGenerator';
 import prisma from '../lib/prisma';
@@ -62,9 +62,6 @@ router.post('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, 
     }
 
     const settings = await prisma.userSettings.findUnique({ where: { user_id: userId } });
-    if (settings?.ai_provider !== 'claude') {
-      return res.status(400).json({ error: 'Resume suggestions only work with Claude provider. Please update settings.' });
-    }
 
     // Build resume sections for the prompt
     const resumeSections = resumes.map((r, i) =>
@@ -113,25 +110,19 @@ RULES:
 - For "add" type suggestions (genuinely missing sections/keywords), keep additions to 1 line max
 - Output ONLY the JSON object, no other text`;
 
-    const { spawn } = require('child_process');
-    const result: string = await new Promise((resolve, reject) => {
-      const env = { ...process.env };
-      delete env.CLAUDECODE;
-      const useShell = process.platform === 'win32';
-      const child = spawn('claude', ['-p', '--model', 'sonnet', '--dangerously-skip-permissions'], {
-        cwd: process.cwd(), shell: useShell, env
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (data: Buffer) => stdout += data.toString());
-      child.stderr.on('data', (data: Buffer) => stderr += data.toString());
-      child.stdin.write(prompt);
-      child.stdin.end();
-      child.on('close', (code: number) => {
-        if (code === 0) resolve(stdout);
-        else { console.error('Claude stderr:', stderr); reject(new Error(`Claude exited with code ${code}`)); }
-      });
-    });
+    const { runForSuggestions } = require('../services/claudeRunner');
+    const config = {
+      provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
+      model: settings?.ai_model || undefined,
+      claudeAccessToken: settings?.claude_access_token || undefined,
+      claudeRefreshToken: settings?.claude_refresh_token || undefined,
+      claudeTokenExpiry: settings?.claude_token_expiry || undefined,
+      geminiApiKey: settings?.gemini_api_key || undefined,
+      geminiAccessToken: settings?.gemini_access_token || undefined,
+      geminiRefreshToken: settings?.gemini_refresh_token || undefined,
+      geminiTokenExpiry: settings?.gemini_token_expiry || undefined,
+    };
+    const result: string = await runForSuggestions(prompt, config, userId);
 
     const jsonMatch = result.match(/```json\s*(\{[\s\S]*?\})\s*```/) || result.match(/(\{[\s\S]*\})/);
     if (!jsonMatch?.[1]) {
@@ -163,6 +154,96 @@ RULES:
     console.error('Error generating resume suggestions:', error);
     res.status(500).json({ error: error.message || 'Failed to generate suggestions' });
   }
+});
+
+// GET /api/documents/:jobId/qa — get saved Q&As for a job
+router.get('/:jobId/qa', requireAuth, async (req: AuthRequest, res) => {
+  const jobId = Number(req.params.jobId);
+  const userId = req.userId!;
+  const qas = await prisma.applicationQA.findMany({
+    where: { job_id: jobId, user_id: userId },
+    orderBy: { created_at: 'asc' }
+  });
+  res.json(qas);
+});
+
+// POST /api/documents/:jobId/qa — generate answer for a question
+router.post('/:jobId/qa', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const jobId = Number(req.params.jobId);
+    const userId = req.userId!;
+    const { question } = req.body;
+    if (!question?.trim()) return res.status(400).json({ error: 'Question is required' });
+
+    const [job, resumes, profile, settings] = await Promise.all([
+      prisma.job.findFirst({ where: { id: jobId, user_id: userId } }),
+      prisma.resume.findMany({ where: { user_id: userId }, orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }] }),
+      prisma.userProfile.findUnique({ where: { user_id: userId } }),
+      prisma.userSettings.findUnique({ where: { user_id: userId } }),
+    ]);
+
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (resumes.length === 0) return res.status(404).json({ error: 'No resumes found. Please upload at least one resume.' });
+
+    const resumeContent = resumes.map((r, i) =>
+      `RESUME ${i + 1}${r.is_default ? ' (default)' : ''}: ${r.name}\n${r.content}`
+    ).join('\n\n---\n\n');
+
+    const profileSection = profile?.content ? `\nCANDIDATE PROFILE:\n${profile.content}\n` : '';
+
+    const prompt = `You are a career coach helping a candidate answer application questions. Use their resume and profile to craft a personalized, authentic answer.
+
+JOB: ${job.title} at ${job.company_name}
+JOB DESCRIPTION: ${job.description || 'Not provided'}
+${profileSection}
+CANDIDATE RESUMES:
+${resumeContent}
+
+APPLICATION QUESTION:
+"${question.trim()}"
+
+Write a strong, authentic answer to this question. Requirements:
+- Draw specifically from the candidate's actual experiences, projects, and skills in their resume
+- Keep it concise and relevant (150-300 words unless the question implies otherwise)
+- Use first person ("I")
+- Be specific — mention real projects, technologies, or situations from the resume
+- Tailor to the job and company
+- Output ONLY the answer text, no preamble or explanation`;
+
+    const config = {
+      provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
+      model: settings?.ai_model || undefined,
+      claudeAccessToken: settings?.claude_access_token || undefined,
+      claudeRefreshToken: settings?.claude_refresh_token || undefined,
+      claudeTokenExpiry: settings?.claude_token_expiry || undefined,
+      geminiApiKey: settings?.gemini_api_key || undefined,
+      geminiAccessToken: settings?.gemini_access_token || undefined,
+      geminiRefreshToken: settings?.gemini_refresh_token || undefined,
+      geminiTokenExpiry: settings?.gemini_token_expiry || undefined,
+    };
+
+    const answer = await runForSuggestions(prompt, config, userId);
+    if (!answer.trim()) return res.status(500).json({ error: 'AI returned empty answer' });
+
+    const qa = await prisma.applicationQA.create({
+      data: { user_id: userId, job_id: jobId, question: question.trim(), answer: answer.trim() }
+    });
+
+    res.json(qa);
+  } catch (error: any) {
+    console.error('Error generating QA answer:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate answer' });
+  }
+});
+
+// DELETE /api/documents/:jobId/qa/:qaId — delete a Q&A
+router.delete('/:jobId/qa/:qaId', requireAuth, async (req: AuthRequest, res) => {
+  const { jobId, qaId } = req.params;
+  const userId = req.userId!;
+  await prisma.applicationQA.deleteMany({
+    where: { id: Number(qaId), job_id: Number(jobId), user_id: userId }
+  });
+  res.json({ success: true });
 });
 
 // GET /api/documents/:jobId/:type
@@ -228,7 +309,14 @@ router.post('/:jobId/:type/generate', requireAuth, async (req: AuthRequest, res)
       ]);
       const config = {
         provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
-        model: settings?.ai_model || undefined
+        model: settings?.ai_model || undefined,
+        claudeAccessToken: settings?.claude_access_token || undefined,
+        claudeRefreshToken: settings?.claude_refresh_token || undefined,
+        claudeTokenExpiry: settings?.claude_token_expiry || undefined,
+        geminiApiKey: settings?.gemini_api_key || undefined,
+        geminiAccessToken: settings?.gemini_access_token || undefined,
+        geminiRefreshToken: settings?.gemini_refresh_token || undefined,
+        geminiTokenExpiry: settings?.gemini_token_expiry || undefined,
       };
       const salary = job.salary_min && job.salary_max
         ? `$${job.salary_min.toLocaleString()} - $${job.salary_max.toLocaleString()}` : undefined;
@@ -238,7 +326,7 @@ router.post('/:jobId/:type/generate', requireAuth, async (req: AuthRequest, res)
         type as 'resume' | 'cover_letter' | 'linkedin' | 'interview',
         job.title, job.company_name, job.description || '',
         config, profile?.content ?? undefined,
-        job.location ?? undefined, salary
+        job.location ?? undefined, salary, userId
       );
 
       if (result.success && result.content) {
@@ -348,4 +436,5 @@ router.get('/:jobId/:type/docx', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// GET /api/documents/:jobId/qa — get saved Q&As for a job
 export default router;

@@ -15,6 +15,7 @@ model User {
   created_at         DateTime            @default(now())
   updated_at         DateTime            @updatedAt
   applications       Application[]
+  applicationQAs     ApplicationQA[]
   companies          Company[]
   emailLogs          EmailLog[]
   generatedDocuments GeneratedDocument[]
@@ -35,12 +36,19 @@ model UserProfile {
 }
 
 model UserSettings {
-  id          Int      @id @default(autoincrement())
-  user_id     Int      @unique
-  ai_provider String   @default("gemini")
-  ai_model    String   @default("gemini-2.0-flash-exp")
-  updated_at  DateTime @updatedAt
-  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id                    Int      @id @default(autoincrement())
+  user_id               Int      @unique
+  ai_provider           String   @default("gemini")
+  ai_model              String   @default("gemini-2.0-flash-exp")
+  claude_access_token    String?
+  claude_refresh_token   String?
+  claude_token_expiry    BigInt?
+  gemini_api_key         String?
+  gemini_access_token    String?
+  gemini_refresh_token   String?
+  gemini_token_expiry    BigInt?
+  updated_at            DateTime @updatedAt
+  user                  User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
 
 model Resume {
@@ -93,6 +101,7 @@ model Job {
   created_at         DateTime            @default(now())
   updated_at         DateTime            @updatedAt
   applications       Application[]
+  applicationQAs     ApplicationQA[]
   generatedDocuments GeneratedDocument[]
   company            Company?            @relation(fields: [company_id], references: [id])
   user               User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -155,6 +164,17 @@ model ResumeSuggestion {
   user                  User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([user_id, job_id])
+}
+
+model ApplicationQA {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  job_id     Int
+  question   String
+  answer     String
+  created_at DateTime @default(now())
+  job        Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
 
 model EmailLog {
