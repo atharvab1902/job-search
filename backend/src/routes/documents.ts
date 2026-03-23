@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { generateDocument, syncLog, runForSuggestions } from '../services/claudeRunner';
+import { generateDocument, syncLog, runForSuggestions } from '../services/runner';
 import { generateResumePDF, generateCoverLetterPDF } from '../services/pdfGenerator';
 import { generateResumeDocx, generateCoverLetterDocx } from '../services/docxGenerator';
 import prisma from '../lib/prisma';
@@ -110,7 +110,7 @@ RULES:
 - For "add" type suggestions (genuinely missing sections/keywords), keep additions to 1 line max
 - Output ONLY the JSON object, no other text`;
 
-    const { runForSuggestions } = require('../services/claudeRunner');
+    const { runForSuggestions } = require('../services/runner');
     const config = {
       provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
       model: settings?.ai_model || undefined,

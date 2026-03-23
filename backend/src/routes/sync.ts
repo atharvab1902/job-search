@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { runJobSync, runWebJobFetch, generateDocumentsForJob, syncLog } from '../services/claudeRunner';
+import { runJobSync, runWebJobFetch, generateDocumentsForJob, syncLog } from '../services/runner';
 import prisma from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 
