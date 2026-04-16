@@ -144,39 +144,45 @@ export async function runWebJobFetch(
     ? `\nSKIP THESE (already in database — match by title+company):\n${existingJobKeys.slice(0, 100).join('\n')}`
     : '\nDatabase is currently empty — add all jobs found.';
 
-  const prompt = `You are a job search assistant. Your task is to find real, currently open job listings that match this candidate's resumes.
+  const today = new Date().toISOString().split('T')[0];
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+  const prompt = `You are a job search assistant for an international student on F1 OPT visa. Your ONLY goal is to find real, currently open, OPT-friendly job listings posted in the last 3 days that match this candidate.
 
 ## CANDIDATE RESUMES
 ${resumeContent}
 
 ## YOUR TASK
 
-**Step 1 — Extract the following from ALL resumes above:**
-- Target job title(s) across all resumes (e.g. "Software Engineer", "AI Engineer")
-- Top 5-8 technical skills appearing across the resumes
-- **Total years of professional experience** (count only real work experience, internships, and co-ops — NOT education years). Be specific, e.g. "1.5 years", "3 years".
-- **Experience level:** entry (0-2 yrs), mid (2-5 yrs), or senior (5+ yrs)
-- Location preference (from the resume address)
+**Step 1 — Extract from ALL resumes:**
+- Target job title(s) (e.g. "Software Engineer", "AI/ML Engineer", "Full Stack Engineer")
+- Top 5-8 technical skills
+- Total years of professional experience (work + internships only, NOT school years)
+- Experience level: entry (0-2 yrs), mid (2-5 yrs), senior (5+ yrs)
+- Location from resume address (for 1 local search)
 
-**Step 2 — Search for RECENT job openings that directly match the candidate's actual background:**
-Build queries around the EXACT skills and roles from Step 1. Use today's date filter for freshness. Focus only on roles the candidate can genuinely do based on their resume.
-- "[exact role from resume] [top 2-3 skills] jobs after:2026-03-20"
-- "[role] [skills] [location] hiring after:2026-03-20 site:linkedin.com"
-- "[role] [skills] startup OR tech company after:2026-03-20"
-- "AI engineer OR full stack engineer [skills] entry level jobs after:2026-03-20"
-- "[role] [skills] visa sponsorship OPT after:2026-03-20"
+**Step 2 — Fetch these curated OPT-friendly job lists first (use WebFetch on each URL):**
+1. https://simplify.jobs/l/New-Grad-Roles-with-Visa-Sponsorship — fetch and extract all job titles, companies, and apply links listed
+2. https://github.com/jobright-ai/2026-Software-Engineer-New-Grad — fetch and scan the README for recently added roles (look for rows added in the last 3 days)
 
-Do EXACTLY 5 searches, no more. Aim to collect at least 10 unique currently-open job listings.
+From these two sources alone, collect every role that matches the candidate's skills. These are pre-vetted OPT-friendly roles.
 
-**Step 3 — For each job found, you MUST verify ALL of the following:**
-- The job is still actively accepting applications (not closed/filled/expired)
-- **Strict experience match:** Required experience must be within ±2 years of candidate's actual experience. Skip "senior", "staff", "lead", "principal", "manager" titles. Skip roles requiring 5+ years if candidate has under 3.
-- **Strict relevance:** Only include roles that directly match the domains, technologies, and job titles present in the candidate's resume. Do NOT apply to domains that have zero evidence in the resume. If a role requires a completely different tech stack or domain than what appears in the resume, skip it.
-- **OPT/Visa friendly:** SKIP any job mentioning "US Citizen only", "security clearance required", "Must be US Citizen or Permanent Resident", "no sponsorship", or government/defense/federal roles. The candidate is an international student on F1 OPT visa.
+**Step 3 — Do 5 targeted web searches for jobs posted after ${threeDaysAgo} (today is ${today}):**
+- "[exact role] [top skills] new grad 2026 after:${threeDaysAgo} site:greenhouse.io OR site:lever.co OR site:ashbyhq.com"
+- "[role] [skills] entry level hiring after:${threeDaysAgo} visa sponsorship"
+- "[role] [skills] [location from resume] after:${threeDaysAgo}"
+- "[role] Python OR React OR [top skill] startup after:${threeDaysAgo} site:wellfound.com OR site:jobs.ashbyhq.com"
+- "[role] [skills] OPT CPT international after:${threeDaysAgo}"
 
-**Step 4 — Extract the direct apply link.** For Google Jobs listings use the actual employer/company career page URL if visible, otherwise use the Google Jobs URL.
+**Step 4 — Hard filter every single job through these gates (REJECT if ANY fail):**
+- Posted after ${threeDaysAgo} — REJECT anything older. Check the actual posting date on the page.
+- US-based role only — REJECT jobs in Europe, Canada, India, or any non-US location
+- OPT/visa friendly — REJECT any mention of: "US Citizen only", "security clearance", "no sponsorship", "must be authorized without sponsorship now or in future", government/defense/federal roles, trading/HFT firms
+- Experience match — REJECT roles requiring 3+ more years than candidate has. REJECT "senior", "staff", "lead", "principal", "director", "manager" titles
+- Relevance — REJECT roles in domains with zero evidence in the resume (quantum, chip design, game dev, blockchain, pure hardware)
+- Working apply link — REJECT any job where the URL 404s or redirects to a homepage
 
-**Step 5 — For each job URL collected, use WebFetch to visit the page and extract the FULL job description.** Company career pages (Workday, Greenhouse, Lever, Workable, Ashby, etc.) are accessible — fetch them. For LinkedIn or Indeed listings where the full description is not accessible, use whatever description text you can get from the search snippet. Put the full description text in the "description" field.
+**Step 5 — For each job that passes all filters, use WebFetch to get the FULL job description from the apply page.**
 
 ${existingList}
 
@@ -188,31 +194,30 @@ Output ONLY this JSON (no other text):
   "jobs": [
     {
       "title": "Software Engineer",
-      "company_name": "Google",
+      "company_name": "Acme Corp",
       "location": "Chicago, IL",
       "salary_min": null,
       "salary_max": null,
       "salary_type": null,
       "remote_type": "hybrid",
       "source": "web",
-      "source_url": "https://careers.google.com/...",
+      "source_url": "https://jobs.ashbyhq.com/acme/...",
       "description": "Full job description text fetched from the page...",
       "email_id": null
     }
   ]
 }
 
-## RULES
-- Only include jobs that are currently open and accepting applications
-- SKIP roles in domains not present in the candidate's resume — if the resume shows no evidence of the required tech stack or domain, skip it
-- SKIP senior/staff/lead/principal/manager titles
-- source_url must be a real clickable apply link — never null
-- source: always "web"
-- Skip jobs already in the database
-- Skip any job requiring US Citizenship, security clearance, "no sponsorship", or from trading firms — candidate is on F1 OPT
-- description must be the full job description from the actual page — not a summary. If WebFetch fails for a URL, use whatever text is available from search.
-- Return at least 10 jobs if found, up to 15
-- If no qualifying jobs found: {"success": true, "jobs": []}`;
+## STRICT RULES
+- Every job MUST have been posted after ${threeDaysAgo} — no exceptions
+- Every job MUST be in the United States — no exceptions
+- Every source_url MUST be a working direct apply link — verify with WebFetch
+- NEVER include jobs from Europe, Canada, or any country outside the US
+- NEVER include jobs that require US citizenship or security clearance
+- NEVER include trading/HFT firm roles
+- description must be the full text from the actual job page, not a summary
+- Return 10-15 jobs if found. Quality over quantity — 5 perfect matches beats 15 bad ones
+- If fewer than 5 qualifying jobs found after all filters: {"success": true, "jobs": []} — do NOT lower your standards to hit a number`;
 
   try {
     syncLog.length = 0;
