@@ -21,7 +21,7 @@ export default function Login({ onLogin }: LoginProps) {
       const endpoint = isSignup ? '/api/auth/signup' : '/api/auth/login';
       const body = isSignup ? { name, email, password } : { email, password };
 
-      const res = await fetch(`http://localhost:3001${endpoint}`, {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
