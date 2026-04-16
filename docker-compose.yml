@@ -30,7 +30,7 @@ services:
         condition: service_healthy
     volumes:
       - ai_workspace:/app/ai-workspace
-      - C:/Users/athar/.gmail-mcp:/home/node/.gmail-mcp:ro
+      - /home/ubuntu/.gmail-mcp:/home/node/.gmail-mcp:ro
     ports:
       - "3001:3001"
 
