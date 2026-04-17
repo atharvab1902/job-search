@@ -216,19 +216,46 @@ Output ONLY this JSON (no other text):
 - NEVER include jobs that require US citizenship or security clearance
 - NEVER include trading/HFT firm roles
 - description must be the full text from the actual job page, not a summary
-- Return 10-15 jobs if found. Quality over quantity — 5 perfect matches beats 15 bad ones
-- If fewer than 5 qualifying jobs found after all filters: {"success": true, "jobs": []} — do NOT lower your standards to hit a number`;
+- Return whatever qualifying jobs you find — even 1 good job is better than nothing
+- Quality over quantity but NEVER return empty just because you found fewer than expected`;
 
   try {
     syncLog.length = 0;
     addLog(`Analyzing resume and searching for matching jobs using ${config.provider}...`);
     const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 900000, config, userId);
 
-    const jsonMatch = stdout.match(/\{\s*"success"\s*:\s*true[\s\S]*?"jobs"\s*:\s*\[[\s\S]*?\]\s*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      addLog(`Found ${parsed.jobs?.length || 0} matching jobs from web search.`);
-      return { success: true, jobs: parsed.jobs || [] };
+    // Log tail of output for debugging
+    addLog(`DEBUG output tail: ${stdout.slice(-800)}`);
+
+    // Strategy 1: find ```json ... ``` block
+    let parsed: any = null;
+    const codeBlockMatch = stdout.match(/```json\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+      try { parsed = JSON.parse(codeBlockMatch[1]); } catch {}
+    }
+
+    // Strategy 2: greedy match for full JSON object
+    if (!parsed) {
+      const jsonMatch = stdout.match(/\{\s*"success"\s*:\s*true[\s\S]*"jobs"\s*:\s*\[[\s\S]*\]\s*\}/);
+      if (jsonMatch) {
+        try { parsed = JSON.parse(jsonMatch[0]); } catch (e: any) {
+          addLog(`JSON parse error: ${e.message}`);
+        }
+      }
+    }
+
+    // Strategy 3: extract just the jobs array
+    if (!parsed) {
+      const arrayMatch = stdout.match(/"jobs"\s*:\s*(\[[\s\S]*\])/);
+      if (arrayMatch) {
+        try { parsed = { jobs: JSON.parse(arrayMatch[1]) }; } catch {}
+      }
+    }
+
+    const jobs: ExtractedJob[] = parsed?.jobs || [];
+    if (jobs.length > 0) {
+      addLog(`Found ${jobs.length} matching jobs from web search.`);
+      return { success: true, jobs };
     }
 
     addLog('No jobs found in web search output.');
