@@ -182,8 +182,6 @@ From these two sources alone, collect every role that matches the candidate's sk
 - Relevance — REJECT roles in domains with zero evidence in the resume (quantum, chip design, game dev, blockchain, pure hardware)
 - Working apply link — REJECT any job where the URL 404s or redirects to a homepage
 
-**Step 5 — For each job that passes all filters, use WebFetch to get the FULL job description from the apply page.**
-
 ${existingList}
 
 ## OUTPUT FORMAT
@@ -215,7 +213,7 @@ Output ONLY this JSON (no other text):
 - NEVER include jobs from Europe, Canada, or any country outside the US
 - NEVER include jobs that require US citizenship or security clearance
 - NEVER include trading/HFT firm roles
-- description must be the full text from the actual job page, not a summary
+- description can be left as null or empty — user will enhance it manually
 - Return whatever qualifying jobs you find — even 1 good job is better than nothing
 - Quality over quantity but NEVER return empty just because you found fewer than expected`;
 
