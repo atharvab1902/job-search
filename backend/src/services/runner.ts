@@ -338,7 +338,7 @@ Include:
   try {
     syncLog.length = 0;
     addLog(`Generating ${docType} for job ${jobId}...`);
-    const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 120000, config, userId);
+    const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 300000, config, userId);
 
     const content = stdout.trim();
     if (content) {
