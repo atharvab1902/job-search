@@ -36,7 +36,7 @@ function runWithProvider(
 }
 
 export async function runForSuggestions(prompt: string, config: ProviderConfig, userId?: number): Promise<string> {
-  const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 180000, config, userId);
+  const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 300000, config, userId);
   return stdout;
 }
 
