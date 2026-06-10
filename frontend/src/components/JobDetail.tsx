@@ -271,17 +271,32 @@ export default function JobDetail() {
     setLoadingSuggestions(true);
     setShowSuggestions(true);
     try {
-      const res = await apiFetch(`/api/documents/${id}/resume-suggestions`, {
+      // Kick off generation (returns immediately with status: 'running')
+      await apiFetch(`/api/documents/${id}/resume-suggestions`, {
         method: 'POST',
-
         body: JSON.stringify({ additionalContext })
       });
-      const data = await res.json();
-      setResumeSuggestions(data.suggestions || []);
-      setSuggestionsGeneratedAt(data.generated_at || new Date().toISOString());
-      setRecommendedResume(data.recommended_resume);
-      setRecommendationReason(data.recommendation_reason);
-      setUsedContext(additionalContext || null);
+
+      // Poll GET endpoint until done
+      while (true) {
+        await new Promise(r => setTimeout(r, 4000));
+        const res = await apiFetch(`/api/documents/${id}/resume-suggestions`);
+        const data = await res.json();
+
+        if (data.status === 'error') {
+          alert('Failed to generate suggestions: ' + (data.error || 'Unknown error'));
+          break;
+        }
+
+        if (data.status === 'running' || !data.suggestions) continue;
+
+        setResumeSuggestions(data.suggestions || []);
+        setSuggestionsGeneratedAt(data.generated_at || new Date().toISOString());
+        setRecommendedResume(data.recommended_resume);
+        setRecommendationReason(data.recommendation_reason);
+        setUsedContext(additionalContext || null);
+        break;
+      }
     } catch (error) {
       console.error('Error getting suggestions:', error);
       alert('Failed to get resume suggestions');

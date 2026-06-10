@@ -14,6 +14,7 @@ const OUTPUT_DIR = path.join(os.tmpdir(), 'job-search-output');
 if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 let generatingDoc: { jobId: number; type: string } | null = null;
+const suggestionInProgress = new Map<string, boolean>(); // key: `${userId}-${jobId}`
 
 const VALID_TYPES = ['resume', 'cover_letter', 'linkedin', 'interview'];
 
@@ -25,15 +26,21 @@ router.get('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, r
       where: { user_id_job_id: { user_id: req.userId!, job_id: jobId } }
     });
 
-    if (!suggestion) return res.json({ suggestions: null, generated_at: null });
+    const key = `${req.userId}-${jobId}`;
+    const running = suggestionInProgress.get(key) || false;
+
+    if (!suggestion) return res.json({ suggestions: null, generated_at: null, status: running ? 'running' : 'idle' });
 
     const data = suggestion.suggestions as Record<string, unknown>;
+    if (data.error) return res.json({ suggestions: null, generated_at: null, status: 'error', error: data.error });
+
     res.json({
       suggestions: data.suggestions,
       recommended_resume: data.recommended_resume,
       recommendation_reason: suggestion.recommendation_reason,
       generated_at: suggestion.generated_at,
-      additional_context: suggestion.additional_context
+      additional_context: suggestion.additional_context,
+      status: running ? 'running' : 'done'
     });
   } catch (error: any) {
     console.error('Error reading suggestions:', error);
@@ -110,6 +117,11 @@ RULES:
 - For "add" type suggestions (genuinely missing sections/keywords), keep additions to 1 line max
 - Output ONLY the JSON object, no other text`;
 
+    const key = `${userId}-${jobId}`;
+    if (suggestionInProgress.get(key)) {
+      return res.json({ status: 'running' });
+    }
+
     const { runForSuggestions } = require('../services/runner');
     const config = {
       provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
@@ -122,37 +134,43 @@ RULES:
       geminiRefreshToken: settings?.gemini_refresh_token || undefined,
       geminiTokenExpiry: settings?.gemini_token_expiry || undefined,
     };
-    const result: string = await runForSuggestions(prompt, config, userId);
 
-    const jsonMatch = result.match(/```json\s*(\{[\s\S]*?\})\s*```/) || result.match(/(\{[\s\S]*\})/);
-    if (!jsonMatch?.[1]) {
-      return res.status(500).json({ error: 'Failed to parse suggestions from AI' });
-    }
+    // Clear stale suggestions so frontend knows generation is fresh
+    await prisma.resumeSuggestion.deleteMany({ where: { user_id: userId, job_id: jobId } });
 
-    const response = JSON.parse(jsonMatch[1]);
-    const { recommended_resume, recommendation_reason, suggestions } = response;
+    suggestionInProgress.set(key, true);
+    res.json({ status: 'running' });
 
-    await prisma.resumeSuggestion.upsert({
-      where: { user_id_job_id: { user_id: userId, job_id: jobId } },
-      create: {
-        user_id: userId,
-        job_id: jobId,
-        recommendation_reason,
-        suggestions: { recommended_resume, suggestions },
-        additional_context: additionalContext || null
-      },
-      update: {
-        recommendation_reason,
-        suggestions: { recommended_resume, suggestions },
-        additional_context: additionalContext || null,
-        generated_at: new Date()
+    // Run in background
+    (async () => {
+      try {
+        const result: string = await runForSuggestions(prompt, config, userId);
+        const jsonMatch = result.match(/```json\s*(\{[\s\S]*?\})\s*```/) || result.match(/(\{[\s\S]*\})/);
+        if (!jsonMatch?.[1]) throw new Error('Failed to parse suggestions from AI');
+
+        const response = JSON.parse(jsonMatch[1]);
+        const { recommended_resume, recommendation_reason, suggestions } = response;
+
+        await prisma.resumeSuggestion.upsert({
+          where: { user_id_job_id: { user_id: userId, job_id: jobId } },
+          create: { user_id: userId, job_id: jobId, recommendation_reason, suggestions: { recommended_resume, suggestions }, additional_context: additionalContext || null },
+          update: { recommendation_reason, suggestions: { recommended_resume, suggestions }, additional_context: additionalContext || null, generated_at: new Date() }
+        });
+      } catch (error: any) {
+        console.error('Error generating resume suggestions:', error);
+        // Save error state so frontend can surface it
+        await prisma.resumeSuggestion.upsert({
+          where: { user_id_job_id: { user_id: userId, job_id: jobId } },
+          create: { user_id: userId, job_id: jobId, recommendation_reason: 'error', suggestions: { error: error.message || 'Generation failed' }, additional_context: null },
+          update: { recommendation_reason: 'error', suggestions: { error: error.message || 'Generation failed' }, generated_at: new Date() }
+        });
+      } finally {
+        suggestionInProgress.delete(key);
       }
-    });
-
-    res.json({ suggestions, recommended_resume, recommendation_reason, generated_at: new Date().toISOString() });
+    })();
   } catch (error: any) {
-    console.error('Error generating resume suggestions:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate suggestions' });
+    console.error('Error starting resume suggestions:', error);
+    res.status(500).json({ error: error.message || 'Failed to start suggestions' });
   }
 });
 
