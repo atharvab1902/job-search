@@ -25,18 +25,19 @@ function runWithProvider(
   cwd: string,
   timeoutMs: number,
   config: ProviderConfig,
-  userId?: number
+  userId?: number,
+  maxTurns: number = 80
 ): Promise<{ stdout: string; stderr: string }> {
   if (config.provider === 'gemini') {
     addLog('Using Gemini CLI...');
     return runGemini(prompt, cwd, timeoutMs, config, userId, addLog);
   }
   addLog(`Using Claude CLI (${config.model || 'sonnet'})...`);
-  return runClaude(prompt, cwd, timeoutMs, config.model, config, userId, addLog);
+  return runClaude(prompt, cwd, timeoutMs, config.model, config, userId, addLog, maxTurns);
 }
 
 export async function runForSuggestions(prompt: string, config: ProviderConfig, userId?: number): Promise<string> {
-  const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 300000, config, userId);
+  const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 600000, config, userId, 1);
   return stdout;
 }
 
