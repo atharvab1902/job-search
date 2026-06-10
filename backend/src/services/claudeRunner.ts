@@ -46,8 +46,7 @@ export function runClaude(
   model?: string,
   config?: ProviderConfig,
   userId?: number,
-  log?: (msg: string) => void,
-  maxTurns: number = 80
+  log?: (msg: string) => void
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const addLog = log || ((_: string) => {});
@@ -55,7 +54,7 @@ export function runClaude(
     // Sanitize model — reject non-claude model names (e.g. gemini-* left over from settings)
     const validModels = ['haiku', 'sonnet', 'opus'];
     const resolvedModel = model && validModels.some(m => model.toLowerCase().includes(m)) ? model : 'haiku';
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', resolvedModel, '--dangerously-skip-permissions', '--max-turns', String(maxTurns)];
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', resolvedModel, '--dangerously-skip-permissions', '--max-turns', '80'];
     const env = { ...process.env };
     delete env.CLAUDECODE;
 
