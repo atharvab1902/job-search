@@ -15,17 +15,23 @@ if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 let generatingDoc: { jobId: number; type: string } | null = null;
 
+// Track in-progress suggestion jobs (key: `${userId}-${jobId}`)
+const pendingSuggestions = new Map<string, boolean>();
+
 const VALID_TYPES = ['resume', 'cover_letter', 'linkedin', 'interview'];
 
 // GET /api/documents/:jobId/resume-suggestions
 router.get('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, res) => {
   try {
     const jobId = Number(req.params.jobId);
+    const userId = req.userId!;
+    const generating = pendingSuggestions.get(`${userId}-${jobId}`) || false;
+
     const suggestion = await prisma.resumeSuggestion.findUnique({
-      where: { user_id_job_id: { user_id: req.userId!, job_id: jobId } }
+      where: { user_id_job_id: { user_id: userId, job_id: jobId } }
     });
 
-    if (!suggestion) return res.json({ suggestions: null, generated_at: null });
+    if (!suggestion) return res.json({ suggestions: null, generated_at: null, generating });
 
     const data = suggestion.suggestions as Record<string, unknown>;
     res.json({
@@ -33,7 +39,8 @@ router.get('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, r
       recommended_resume: data.recommended_resume,
       recommendation_reason: suggestion.recommendation_reason,
       generated_at: suggestion.generated_at,
-      additional_context: suggestion.additional_context
+      additional_context: suggestion.additional_context,
+      generating
     });
   } catch (error: any) {
     console.error('Error reading suggestions:', error);
@@ -47,11 +54,15 @@ router.post('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, 
     const jobId = Number(req.params.jobId);
     const { additionalContext } = req.body;
     const userId = req.userId!;
+    const key = `${userId}-${jobId}`;
+
+    if (pendingSuggestions.get(key)) {
+      return res.json({ status: 'pending' });
+    }
 
     const job = await prisma.job.findFirst({ where: { id: jobId, user_id: userId } });
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    // Read resumes from DB
     const resumes = await prisma.resume.findMany({
       where: { user_id: userId },
       orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }]
@@ -63,13 +74,11 @@ router.post('/:jobId/resume-suggestions', requireAuth, async (req: AuthRequest, 
 
     const settings = await prisma.userSettings.findUnique({ where: { user_id: userId } });
 
-    // Build resume sections for the prompt
     const resumeSections = resumes.map((r, i) =>
       `RESUME ${i + 1}: ${r.name}${r.is_default ? ' (default)' : ''}\n${r.content}`
     ).join('\n\n---\n\n');
 
     const resumeCount = resumes.length;
-
     const additionalContextSection = additionalContext
       ? `\n\nADDITIONAL CANDIDATE CONTEXT:\n${additionalContext}\n\nIMPORTANT: Incorporate this new information into your suggestions.`
       : '';
@@ -110,9 +119,8 @@ RULES:
 - For "add" type suggestions (genuinely missing sections/keywords), keep additions to 1 line max
 - Output ONLY the JSON object, no other text`;
 
-    const { runForSuggestions } = require('../services/runner');
     const config = {
-      provider: (settings?.ai_provider || 'gemini') as 'claude' | 'gemini',
+      provider: (settings?.ai_provider || 'claude') as 'claude' | 'gemini',
       model: settings?.ai_model || undefined,
       claudeAccessToken: settings?.claude_access_token || undefined,
       claudeRefreshToken: settings?.claude_refresh_token || undefined,
@@ -122,37 +130,50 @@ RULES:
       geminiRefreshToken: settings?.gemini_refresh_token || undefined,
       geminiTokenExpiry: settings?.gemini_token_expiry || undefined,
     };
-    const result: string = await runForSuggestions(prompt, config, userId);
 
-    const jsonMatch = result.match(/```json\s*(\{[\s\S]*?\})\s*```/) || result.match(/(\{[\s\S]*\})/);
-    if (!jsonMatch?.[1]) {
-      return res.status(500).json({ error: 'Failed to parse suggestions from AI' });
-    }
+    // Mark pending and return immediately — frontend will poll GET
+    pendingSuggestions.set(key, true);
+    res.json({ status: 'pending' });
 
-    const response = JSON.parse(jsonMatch[1]);
-    const { recommended_resume, recommendation_reason, suggestions } = response;
+    setImmediate(async () => {
+      try {
+        const result = await runForSuggestions(prompt, config, userId);
 
-    await prisma.resumeSuggestion.upsert({
-      where: { user_id_job_id: { user_id: userId, job_id: jobId } },
-      create: {
-        user_id: userId,
-        job_id: jobId,
-        recommendation_reason,
-        suggestions: { recommended_resume, suggestions },
-        additional_context: additionalContext || null
-      },
-      update: {
-        recommendation_reason,
-        suggestions: { recommended_resume, suggestions },
-        additional_context: additionalContext || null,
-        generated_at: new Date()
+        const jsonMatch = result.match(/```json\s*(\{[\s\S]*?\})\s*```/) || result.match(/(\{[\s\S]*\})/);
+        if (!jsonMatch?.[1]) {
+          console.error(`Failed to parse suggestions from AI for job ${jobId}`);
+          return;
+        }
+
+        const response = JSON.parse(jsonMatch[1]);
+        const { recommended_resume, recommendation_reason, suggestions } = response;
+
+        await prisma.resumeSuggestion.upsert({
+          where: { user_id_job_id: { user_id: userId, job_id: jobId } },
+          create: {
+            user_id: userId,
+            job_id: jobId,
+            recommendation_reason,
+            suggestions: { recommended_resume, suggestions },
+            additional_context: additionalContext || null
+          },
+          update: {
+            recommendation_reason,
+            suggestions: { recommended_resume, suggestions },
+            additional_context: additionalContext || null,
+            generated_at: new Date()
+          }
+        });
+        console.log(`Resume suggestions saved for job ${jobId} (${suggestions?.length || 0} suggestions)`);
+      } catch (err) {
+        console.error(`Background suggestion error for job ${jobId}:`, err);
+      } finally {
+        pendingSuggestions.delete(key);
       }
     });
-
-    res.json({ suggestions, recommended_resume, recommendation_reason, generated_at: new Date().toISOString() });
   } catch (error: any) {
-    console.error('Error generating resume suggestions:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate suggestions' });
+    console.error('Error starting resume suggestions:', error);
+    res.status(500).json({ error: error.message || 'Failed to start suggestions' });
   }
 });
 

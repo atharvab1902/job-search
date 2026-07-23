@@ -36,7 +36,7 @@ function runWithProvider(
 }
 
 export async function runForSuggestions(prompt: string, config: ProviderConfig, userId?: number): Promise<string> {
-  const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 180000, config, userId);
+  const { stdout } = await runWithProvider(prompt, PROJECT_ROOT, 600000, config, userId);
   return stdout;
 }
 
@@ -181,7 +181,7 @@ Use the experience level from Step 1 to pick the right seniority keywords (e.g. 
 - OPT/visa friendly — REJECT any mention of: "US Citizen only", "security clearance", "no sponsorship", "must be authorized without sponsorship now or in future", government/defense/federal roles, trading/HFT firms
 - Experience match — REJECT roles requiring 3+ more years than candidate has. REJECT titles that are 2+ levels above the candidate's experience level (e.g. reject "staff", "principal", "director", "manager" for entry/mid candidates; reject "director", "VP" for senior candidates)
 - Relevance — REJECT roles in domains with zero evidence in the resume (quantum, chip design, game dev, blockchain, pure hardware)
-- Working apply link — REJECT any job where the URL 404s or redirects to a homepage
+- Include the direct apply URL as-is — do not spend extra calls verifying links
 
 ${existingList}
 

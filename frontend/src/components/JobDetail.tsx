@@ -95,6 +95,11 @@ export default function JobDetail() {
         setUsedContext(data.additional_context);
         setShowSuggestions(true);
       }
+      // If analysis is already in progress from a previous visit, start polling
+      if (data.generating) {
+        setLoadingSuggestions(true);
+        setShowSuggestions(true);
+      }
     } catch (error) {
       console.error('Error loading suggestions:', error);
     }
@@ -106,6 +111,36 @@ export default function JobDetail() {
     loadSuggestions();
     apiFetch(`/api/documents/${id}/qa`).then(r => r.json()).then(d => Array.isArray(d) && setQaList(d)).catch(() => {});
   }, [id, loadDocuments, loadSuggestions]);
+
+  // Poll for resume suggestions when loadingSuggestions is true
+  useEffect(() => {
+    if (!loadingSuggestions) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await apiFetch(`/api/documents/${id}/resume-suggestions`);
+        const data = await res.json();
+
+        if (!data.generating && data.suggestions) {
+          setResumeSuggestions(data.suggestions);
+          setSuggestionsGeneratedAt(data.generated_at);
+          setRecommendedResume(data.recommended_resume);
+          setRecommendationReason(data.recommendation_reason);
+          setUsedContext(data.additional_context);
+          setShowSuggestions(true);
+          setLoadingSuggestions(false);
+        } else if (!data.generating && !data.suggestions) {
+          // Analysis finished but nothing was saved (error)
+          setLoadingSuggestions(false);
+          alert('Resume analysis did not complete. Please try again.');
+        }
+      } catch (err) {
+        console.error('Suggestions polling error:', err);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [loadingSuggestions, id]);
 
   // Poll for generation status
   useEffect(() => {
@@ -271,21 +306,15 @@ export default function JobDetail() {
     setLoadingSuggestions(true);
     setShowSuggestions(true);
     try {
-      const res = await apiFetch(`/api/documents/${id}/resume-suggestions`, {
+      await apiFetch(`/api/documents/${id}/resume-suggestions`, {
         method: 'POST',
-
         body: JSON.stringify({ additionalContext })
       });
-      const data = await res.json();
-      setResumeSuggestions(data.suggestions || []);
-      setSuggestionsGeneratedAt(data.generated_at || new Date().toISOString());
-      setRecommendedResume(data.recommended_resume);
-      setRecommendationReason(data.recommendation_reason);
-      setUsedContext(additionalContext || null);
+      // Backend returns immediately with { status: 'pending' }
+      // The polling useEffect above will pick up results when ready
     } catch (error) {
-      console.error('Error getting suggestions:', error);
-      alert('Failed to get resume suggestions');
-    } finally {
+      console.error('Error starting suggestions:', error);
+      alert('Failed to start resume analysis');
       setLoadingSuggestions(false);
     }
   }
@@ -468,7 +497,8 @@ export default function JobDetail() {
             {loadingSuggestions && (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto"></div>
-                <p className="mt-4 text-gray-600">Analyzing job description and your resume...</p>
+                <p className="mt-4 text-gray-600 font-medium">Analyzing your resume against this job...</p>
+                <p className="mt-2 text-sm text-gray-500">This takes 3-8 minutes. You can navigate away and come back — results save automatically.</p>
               </div>
             )}
 

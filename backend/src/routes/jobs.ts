@@ -45,6 +45,18 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// DELETE /api/jobs — clear all jobs for user
+router.delete('/', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!;
+    const result = await prisma.job.deleteMany({ where: { user_id: userId } });
+    res.json({ success: true, deleted: result.count });
+  } catch (error) {
+    console.error('Error clearing all jobs:', error);
+    res.status(500).json({ error: 'Failed to clear jobs' });
+  }
+});
+
 // GET /api/jobs/:id
 router.get('/:id', requireAuth, async (req: AuthRequest, res) => {
   try {

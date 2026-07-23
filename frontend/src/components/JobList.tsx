@@ -58,6 +58,17 @@ export default function JobList() {
     }
   }
 
+  async function clearAllJobs() {
+    if (!confirm(`Delete all ${total} jobs? This cannot be undone.`)) return;
+    try {
+      await apiFetch('/api/jobs', { method: 'DELETE' });
+      loadJobs();
+    } catch (error) {
+      console.error('Error clearing jobs:', error);
+      alert('Failed to clear jobs');
+    }
+  }
+
   const statuses: { value: string; label: string }[] = [
     { value: 'all', label: 'All' },
     { value: 'new', label: 'New' },
@@ -106,6 +117,14 @@ export default function JobList() {
 
           <div className="ml-auto flex items-center gap-3">
             <span className="text-sm text-gray-600">{total} jobs found</span>
+            {total > 0 && (
+              <button
+                onClick={clearAllJobs}
+                className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm font-semibold"
+              >
+                Clear All
+              </button>
+            )}
             <Link
               to="/jobs/add"
               className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-semibold"
