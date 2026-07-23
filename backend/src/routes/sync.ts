@@ -131,7 +131,7 @@ router.post('/web-fetch', requireAuth, async (req: AuthRequest, res) => {
     const settings = await prisma.userSettings.findUnique({ where: { user_id: userId } });
     const config = {
       provider: 'claude' as const,
-      model: settings?.ai_model || 'sonnet',
+      model: 'sonnet',
       claudeAccessToken: settings?.claude_access_token || undefined,
       claudeRefreshToken: settings?.claude_refresh_token || undefined,
       claudeTokenExpiry: settings?.claude_token_expiry || undefined,
