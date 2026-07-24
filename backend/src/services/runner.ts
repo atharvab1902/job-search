@@ -161,21 +161,14 @@ ${resumeContent}
 - Experience level: entry (0-2 yrs), mid (2-5 yrs), senior (5+ yrs)
 - Location from resume address (for 1 local search)
 
-**Step 2 — Fetch these curated OPT-friendly job lists first (use WebFetch on each URL):**
-1. https://simplify.jobs/l/Roles-with-Visa-Sponsorship — fetch and extract all job titles, companies, and apply links that match the candidate's experience level
-2. https://github.com/jobright-ai/2026-Software-Engineer-New-Grad — fetch and scan the README for recently added roles (look for rows added in the last 3 days), but only include if candidate is entry-level
-
-From these sources, collect every role that matches the candidate's skills AND experience level extracted in Step 1.
-
-**Step 3 — Do 5 targeted web searches for jobs posted after ${threeDaysAgo} (today is ${today}):**
-Use the experience level from Step 1 to pick the right seniority keywords (e.g. "entry level" for 0-2 yrs, "mid level" or omit level for 2-5 yrs, "senior" for 5+ yrs):
-- "[exact role] [top skills] [experience level] after:${threeDaysAgo} site:greenhouse.io OR site:lever.co OR site:ashbyhq.com"
-- "[role] [skills] [experience level] hiring after:${threeDaysAgo} visa sponsorship OPT"
+**Step 2 — Do 4 targeted web searches (do NOT use WebFetch on any external pages):**
+Use the experience level from Step 1 to pick the right seniority keywords:
+- "[exact role] [top 3 skills] after:${threeDaysAgo} site:greenhouse.io OR site:lever.co OR site:ashbyhq.com"
+- "[role] [skills] visa sponsorship OPT hiring after:${threeDaysAgo}"
 - "[role] [skills] [location from resume] after:${threeDaysAgo}"
-- "[role] Python OR React OR [top skill] startup after:${threeDaysAgo} site:wellfound.com OR site:jobs.ashbyhq.com"
 - "[role] [skills] OPT CPT international after:${threeDaysAgo}"
 
-**Step 4 — Hard filter every single job through these gates (REJECT if ANY fail):**
+**Step 3 — Hard filter every single job through these gates (REJECT if ANY fail):**
 - Posted after ${threeDaysAgo} — REJECT anything older. Check the actual posting date on the page.
 - US-based role only — REJECT jobs in Europe, Canada, India, or any non-US location
 - OPT/visa friendly — REJECT any mention of: "US Citizen only", "security clearance", "no sponsorship", "must be authorized without sponsorship now or in future", government/defense/federal roles, trading/HFT firms
@@ -208,15 +201,12 @@ Output ONLY this JSON (no other text):
 }
 
 ## STRICT RULES
-- Every job MUST have been posted after ${threeDaysAgo} — no exceptions
 - Every job MUST be in the United States — no exceptions
-- Every source_url MUST be a working direct apply link — verify with WebFetch
-- NEVER include jobs from Europe, Canada, or any country outside the US
 - NEVER include jobs that require US citizenship or security clearance
 - NEVER include trading/HFT firm roles
-- description can be left as null or empty — user will enhance it manually
-- Return whatever qualifying jobs you find — even 1 good job is better than nothing
-- Quality over quantity but NEVER return empty just because you found fewer than expected`;
+- description must be null — do NOT fetch any job pages
+- source_url: include the direct apply link from search results as-is — do NOT use WebFetch to verify it
+- Return whatever qualifying jobs you find — even 1 good job is better than nothing`;
 
   try {
     syncLog.length = 0;
