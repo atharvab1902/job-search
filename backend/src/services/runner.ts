@@ -201,7 +201,7 @@ Output ONLY this JSON (no other text):
       "remote_type": "hybrid",
       "source": "web",
       "source_url": "https://jobs.ashbyhq.com/acme/...",
-      "description": "Full job description text fetched from the page...",
+      "description": null,
       "email_id": null
     }
   ]
