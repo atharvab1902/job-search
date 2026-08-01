@@ -170,9 +170,10 @@ Use the experience level from Step 1 to pick the right seniority keywords:
 
 **Step 3 — Hard filter every single job through these gates (REJECT if ANY fail):**
 - Posted after ${threeDaysAgo} — REJECT anything older. Check the actual posting date on the page.
-- US-based role only — REJECT jobs in Europe, Canada, India, or any non-US location
+- US-based role only — jobs MUST be physically located in the United States. REJECT jobs in Singapore, UK, Europe, Canada, India, Mexico, or anywhere outside the US. "Remote" is only acceptable if the company is US-based.
 - OPT/visa friendly — REJECT any mention of: "US Citizen only", "security clearance", "no sponsorship", "must be authorized without sponsorship now or in future", government/defense/federal roles, trading/HFT firms
-- Experience match — REJECT roles requiring 3+ more years than candidate has. REJECT titles that are 2+ levels above the candidate's experience level (e.g. reject "staff", "principal", "director", "manager" for entry/mid candidates; reject "director", "VP" for senior candidates)
+- Experience match — for entry-level candidates (0-2 yrs): REJECT titles with "Senior", "Staff", "Lead", "Principal", "Manager", "Director". For mid-level candidates (2-5 yrs): REJECT titles with "Staff", "Principal", "Director", "Manager". REJECT roles explicitly requiring 5+ years of experience if candidate has under 3 years. REJECT roles explicitly requiring 7+ years.
+- Recency — REJECT roles where the job URL is 403 Forbidden or 410 Gone (use context from search snippets to judge if the listing is live)
 - Relevance — REJECT roles in domains with zero evidence in the resume (quantum, chip design, game dev, blockchain, pure hardware)
 - Include the direct apply URL as-is — do not spend extra calls verifying links
 
@@ -201,7 +202,9 @@ Output ONLY this JSON (no other text):
 }
 
 ## STRICT RULES
-- Every job MUST be in the United States — no exceptions
+- Every job MUST be in the United States — no exceptions (Singapore, UK, Canada, Mexico = instant reject)
+- NEVER include Senior/Staff/Lead/Principal roles for candidates with under 3 years of experience
+- NEVER include roles requiring 7+ years of experience
 - NEVER include jobs that require US citizenship or security clearance
 - NEVER include trading/HFT firm roles
 - description must be null — do NOT fetch any job pages
